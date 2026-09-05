@@ -1,4 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
+﻿#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <intrin.h>
@@ -118,7 +118,7 @@ int wmain(int argc, wchar_t* argv[])
     }
     const bool runOnce = argc == 2 && wcscmp(argv[1], L"--once") == 0;
     if (argc > 1 && !runOnce) {
-        std::printf("Usage: Cpu_freq_Moniter_v1.2.0.exe [--once | --demo | --ui-test | --sensor-test]\n");
+        std::printf("Usage: Cpu_freq_Moniter_v1.3.0.exe [--once | --demo | --ui-test | --sensor-test]\n");
         return 2;
     }
 

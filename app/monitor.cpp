@@ -1,4 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
+﻿#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <shellapi.h>
@@ -23,7 +23,7 @@
 namespace {
 constexpr UINT TrayMessage = WM_APP + 1;
 constexpr UINT SampleMessage = WM_APP + 2;
-struct Row { WORD group; BYTE cpu; double total = -1, kernel = -1, ghz = -1; };
+struct Row { WORD group; BYTE cpu; double total = -1, kernel = -1, ghz = -1, time = -1, utility = -1; };
 struct Option { const wchar_t* key; const wchar_t* label; int value, minimum, maximum; };
 Option options[] = {
     {L"Opacity", L"Opacity (%)", 92, 15, 100},
@@ -61,15 +61,31 @@ int scrollOffset = 0;
 int savedX = CW_USEDEFAULT, savedY = CW_USEDEFAULT;
 bool preview = false;
 bool selfTesting = false;
+int language = 0;
+std::atomic<int> usageMode{1};
+const wchar_t* Tr(const wchar_t* en, const wchar_t* zh) { return language == 1 ? zh : en; }
+const wchar_t* chineseLabels[] = {L"不透明度 (%)", L"窗口宽度 (DIP)", L"行间距 (DIP)", L"标题字号 (DIP)", L"条目字号 (DIP)", L"进度条高度 (DIP)", L"窗口内边距 (DIP)", L"圆角半径 (DIP)", L"采样间隔 (ms)", L"始终置顶 (0 / 1)"};
+
 
 template<class T> void Release(T*& object) { if (object) { object->Release(); object = nullptr; } }
 int Px(float dip) { return static_cast<int>(std::ceil(dip * scale)); }
 std::wstring Number(int value) { return std::to_wstring(value); }
 void SaveSettings() {
     for (const auto& o : options) WritePrivateProfileStringW(L"UI", o.key, Number(o.value).c_str(), iniPath.c_str());
+    WritePrivateProfileStringW(L"UI", L"Language", language ? L"zh-CN" : L"en", iniPath.c_str());
+    WritePrivateProfileStringW(L"UI", L"UsageMode", Number(usageMode.load()).c_str(), iniPath.c_str());
     RECT rect{}; GetWindowRect(windowHandle, &rect);
     WritePrivateProfileStringW(L"UI", L"X", Number(rect.left).c_str(), iniPath.c_str());
     WritePrivateProfileStringW(L"UI", L"Y", Number(rect.top).c_str(), iniPath.c_str());
+}
+void ReadPreferences() {
+    for (auto& o : options) o.value = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"UI", o.key, o.value, iniPath.c_str())), o.minimum, o.maximum);
+    wchar_t selectedLanguage[16]{};
+    GetPrivateProfileStringW(L"UI", L"Language", PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE ? L"zh-CN" : L"en", selectedLanguage, 16, iniPath.c_str());
+    language = wcscmp(selectedLanguage,L"zh-CN") == 0 ? 1 : 0;
+    usageMode.store(std::clamp(static_cast<int>(GetPrivateProfileIntW(L"UI",L"UsageMode",1,iniPath.c_str())),0,1));
+    savedX = static_cast<int>(GetPrivateProfileIntW(L"UI", L"X", CW_USEDEFAULT, iniPath.c_str()));
+    savedY = static_cast<int>(GetPrivateProfileIntW(L"UI", L"Y", CW_USEDEFAULT, iniPath.c_str()));
 }
 void LoadSettings() {
     if (selfTesting) return;
@@ -78,9 +94,7 @@ void LoadSettings() {
         iniPath = std::wstring(local) + L"\\CpuFreqMonitor"; CoTaskMemFree(local);
         CreateDirectoryW(iniPath.c_str(), nullptr); iniPath += L"\\settings.ini";
     }
-    for (auto& o : options) o.value = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"UI", o.key, o.value, iniPath.c_str())), o.minimum, o.maximum);
-    savedX = static_cast<int>(GetPrivateProfileIntW(L"UI", L"X", CW_USEDEFAULT, iniPath.c_str()));
-    savedY = static_cast<int>(GetPrivateProfileIntW(L"UI", L"Y", CW_USEDEFAULT, iniPath.c_str()));
+    ReadPreferences();
 }
 DWRITE_TEXT_METRICS Measure(const std::wstring& text, IDWriteTextFormat* font) {
     IDWriteTextLayout* layout = nullptr; DWRITE_TEXT_METRICS metrics{};
@@ -94,11 +108,11 @@ void Layout() {
     if (!normalFont || !titleFont) return;
     normalFont->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP); titleFont->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     titleHeight = Measure(L"CPU Freq Moniter", titleFont).height;
-    textHeight = Measure(L"Temperature: 100.0 \u00b0C", normalFont).height;
+    textHeight = Measure(Tr(L"Temperature: 100.0 \u00b0C",L"温度: 100.0 \u00b0C"), normalFont).height;
     labelWidth = Measure(L"Core" + Number(static_cast<int>(processorCount) - 1), normalFont).width + 10;
     frequencyWidth = Measure(L"00.0 GHz", normalFont).width + 10;
     const float padding = static_cast<float>(options[6].value);
-    contentWidth = (std::max)({static_cast<float>(options[1].value), labelWidth + frequencyWidth + 50 + 2 * padding, Measure(L"CPU Freq Moniter", titleFont).width + 2 * padding, Measure(L"Temperature: 100.0 \u00b0C", normalFont).width + 2 * padding});
+    contentWidth = (std::max)({static_cast<float>(options[1].value), labelWidth + frequencyWidth + 50 + 2 * padding, Measure(L"CPU Freq Moniter", titleFont).width + 2 * padding, Measure(Tr(L"Temperature: 100.0 \u00b0C",L"温度: 100.0 \u00b0C"), normalFont).width + 2 * padding});
     rowHeight = (std::max)(textHeight, static_cast<float>(options[5].value)) + static_cast<float>(options[2].value);
     contentHeight = padding * 2 + titleHeight + 12 + rowHeight * static_cast<float>(processorCount) + 10 + textHeight * 2;
     RECT current{}; GetWindowRect(windowHandle, &current);
@@ -150,8 +164,13 @@ void Paint() {
                 normalFont->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING); y += rowHeight;
             }
             y += 10; wchar_t value[64]{};
-            if (temp >= 0) swprintf_s(value,L"Temperature: %.1f \u00b0C",temp); else wcscpy_s(value,L"Temperature: N/A");
+            if (temp >= 0) swprintf_s(value,Tr(L"Temperature: %.1f \u00b0C",L"温度: %.1f \u00b0C"),temp); else wcscpy_s(value,Tr(L"Temperature: N/A",L"温度: N/A"));
             DrawTextLine(value, normalFont,p,y,width,textHeight+2,text);
+            if(status == L"Initializing sensors...") status=Tr(L"Initializing sensors...",L"正在初始化传感器…");
+            else if(status == L"DEMO - simulated sensors") status=Tr(L"DEMO - simulated sensors",L"演示模式 - 模拟数据");
+            else if(status == L"Frequency unavailable (PawnIO / Intel)") status=Tr(L"Frequency unavailable (PawnIO / Intel)",L"频率不可用 (PawnIO / Intel)");
+            else if(status == L"Some CPU usage counters unavailable") status=Tr(L"CPU usage unavailable",L"部分占用率计数器不可用");
+            else status=status == L"Utility" ? Tr(L"Utility / kernel utility",L"性能使用率 / 内核性能使用率") : Tr(L"Busy time / kernel time",L"时间占用率 / 内核时间占用率");
             DrawTextLine(status,normalFont,p,y+textHeight,width,textHeight+2,muted);
         }
         Release(text); Release(muted); Release(background); Release(blue); Release(kernel);
@@ -168,22 +187,28 @@ void Sample() {
     if (intel && maxLeaf >= 0x16) { __cpuidex(cpuid,0x16,0); if(cpuid[2]>0 && cpuid[2]<=1000) bus=static_cast<unsigned>(cpuid[2]); }
     const bool hardware = !preview && intel && pawn.OpenAndLoad(module.c_str(),error);
     PDH_HQUERY query = nullptr; const bool queryOpen = PdhOpenQueryW(nullptr,0,&query) == ERROR_SUCCESS;
-    std::vector<PDH_HCOUNTER> total(rows.size()), kernel(rows.size());
+    std::vector<PDH_HCOUNTER> total(rows.size()), kernel(rows.size()), utility(rows.size()), privilegedUtility(rows.size());
     for (std::size_t i=0; queryOpen && i<rows.size(); ++i) {
         const auto instance = Number(rows[i].group)+L","+Number(rows[i].cpu);
         PdhAddEnglishCounterW(query,(L"\\Processor Information("+instance+L")\\% Processor Time").c_str(),0,&total[i]);
         PdhAddEnglishCounterW(query,(L"\\Processor Information("+instance+L")\\% Privileged Time").c_str(),0,&kernel[i]);
+        PdhAddEnglishCounterW(query,(L"\\Processor Information("+instance+L")\\% Processor Utility").c_str(),0,&utility[i]);
+        PdhAddEnglishCounterW(query,(L"\\Processor Information("+instance+L")\\% Privileged Utility").c_str(),0,&privilegedUtility[i]);
     }
     if(queryOpen) PdhCollectQueryData(query);
     unsigned tick = 0;
     while(WaitForSingleObject(stopEvent, static_cast<DWORD>(interval.load())) == WAIT_TIMEOUT) {
         std::vector<Row> next; { std::lock_guard<std::mutex> lock(dataMutex); next=rows; }
         const bool collected = queryOpen && PdhCollectQueryData(query) == ERROR_SUCCESS;
-        double temp = -1; int available = 0;
+        double temp = -1; int available = 0; const int selectedMode=usageMode.load();
         for(std::size_t i=0;i<next.size();++i) {
             auto& row=next[i]; row.total=row.kernel=row.ghz=-1;
-            auto readCounter = [&](PDH_HCOUNTER counter) { PDH_FMT_COUNTERVALUE value{}; if(collected && counter && PdhGetFormattedCounterValue(counter,PDH_FMT_DOUBLE,nullptr,&value)==ERROR_SUCCESS && (value.CStatus==PDH_CSTATUS_VALID_DATA || value.CStatus==PDH_CSTATUS_NEW_DATA)) return std::clamp(value.doubleValue,0.0,100.0); return -1.0; };
-            row.total=readCounter(total[i]); row.kernel=readCounter(kernel[i]);
+            auto readCounter = [&](PDH_HCOUNTER counter) { PDH_FMT_COUNTERVALUE value{}; if(collected && counter && PdhGetFormattedCounterValue(counter,PDH_FMT_DOUBLE | PDH_FMT_NOCAP100,nullptr,&value)==ERROR_SUCCESS && (value.CStatus==PDH_CSTATUS_VALID_DATA || value.CStatus==PDH_CSTATUS_NEW_DATA)) return std::isfinite(value.doubleValue) ? (std::max)(value.doubleValue,0.0) : -1.0; return -1.0; };
+            row.time=readCounter(total[i]); row.utility=readCounter(utility[i]);
+            row.total=selectedMode ? row.utility : row.time;
+            row.kernel=readCounter(selectedMode ? privilegedUtility[i] : kernel[i]);
+            // Utility may exceed 100% under turbo. Clamp both segments on the same 0..100 scale.
+            if(row.total>=0) row.total=(std::min)(row.total,100.0);
             if(row.total>=0 && row.kernel>=0) row.kernel=(std::min)(row.total,row.kernel); else row.kernel=-1;
             if(row.total>=0) ++available;
             if(hardware) {
@@ -200,7 +225,7 @@ void Sample() {
             }
             if(preview) { row.total=static_cast<double>((i*17+tick*7)%101); row.kernel=row.total*0.3; row.ghz=i<8?5.2:4.0; temp=52; }
         }
-        std::wstring status = preview ? L"DEMO - simulated sensors" : (!hardware ? L"Frequency unavailable (PawnIO / Intel)" : (available==static_cast<int>(next.size()) ? L"Blue: total  /  Dark: kernel" : L"Some CPU usage counters unavailable"));
+        std::wstring status = preview ? L"DEMO - simulated sensors" : (!hardware ? L"Frequency unavailable (PawnIO / Intel)" : (available==static_cast<int>(next.size()) ? (selectedMode ? L"Utility" : L"Time") : L"Some CPU usage counters unavailable"));
         { std::lock_guard<std::mutex> lock(dataMutex); rows=std::move(next); temperature=temp; sampleStatus=std::move(status); }
         PostMessageW(windowHandle,SampleMessage,0,0); ++tick;
     }
@@ -218,10 +243,22 @@ HICON CreateTrayIcon() {
 }
 void Tray(DWORD operation) {
     if (selfTesting) return;
-    NOTIFYICONDATAW data{}; data.cbSize=sizeof(data);data.hWnd=windowHandle;data.uID=1;data.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;data.uCallbackMessage=TrayMessage;data.hIcon=trayIcon;wcscpy_s(data.szTip,L"CPU Freq Moniter 1.2.0");
+    NOTIFYICONDATAW data{}; data.cbSize=sizeof(data);data.hWnd=windowHandle;data.uID=1;data.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;data.uCallbackMessage=TrayMessage;data.hIcon=trayIcon;wcscpy_s(data.szTip,L"CPU Freq Moniter 1.3.0");
     Shell_NotifyIconW(operation,&data);
 }
 void ShowSettings();
+void UpdateSettingsLanguage(HWND hwnd) {
+    SetWindowTextW(hwnd,Tr(L"CPU Freq Moniter - Settings",L"CPU Freq Moniter - 设置"));
+    for(int i=0;i<OptionCount;++i) SetWindowTextW(GetDlgItem(hwnd,200+i), language ? chineseLabels[i] : options[i].label);
+    SetWindowTextW(GetDlgItem(hwnd,300),Tr(L"Changes preview and save automatically.\nWidth expands when needed to fit text.",L"更改即时预览并自动保存。\n宽度不足时会自动扩展以容纳文字。"));
+    SetWindowTextW(GetDlgItem(hwnd,301),Tr(L"Close",L"关闭"));
+    SetWindowTextW(GetDlgItem(hwnd,302),Tr(L"Language",L"语言"));
+    SetWindowTextW(GetDlgItem(hwnd,304),Tr(L"CPU usage measurement",L"CPU 占用率口径"));
+    SendDlgItemMessageW(hwnd,305,CB_RESETCONTENT,0,0);
+    SendDlgItemMessageW(hwnd,305,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(Tr(L"Busy time",L"时间占用率")));
+    SendDlgItemMessageW(hwnd,305,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(Tr(L"Processor Utility",L"性能使用率")));
+    SendDlgItemMessageW(hwnd,305,CB_SETCURSEL,usageMode.load(),0);
+}
 void SettingsLayout(HWND hwnd) {
     const float s=static_cast<float>(GetDpiForWindow(hwnd))/96;
     auto px=[s](int value){return static_cast<int>(std::ceil(static_cast<float>(value)*s));};
@@ -232,10 +269,18 @@ void SettingsLayout(HWND hwnd) {
         SetWindowPos(edits[i],nullptr,px(250),px(20+i*34),px(100),px(25),SWP_NOZORDER);
         SendMessageW(GetDlgItem(hwnd,200+i),WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);SendMessageW(edits[i],WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);
     }
-    SetWindowPos(GetDlgItem(hwnd,300),nullptr,px(20),px(365),px(340),px(46),SWP_NOZORDER);
-    SetWindowPos(GetDlgItem(hwnd,301),nullptr,px(240),px(422),px(110),px(30),SWP_NOZORDER);
+    SetWindowPos(GetDlgItem(hwnd,300),nullptr,px(20),px(20+OptionCount*34+80),px(340),px(46),SWP_NOZORDER);
+    SetWindowPos(GetDlgItem(hwnd,301),nullptr,px(240),px(20+OptionCount*34+137),px(110),px(30),SWP_NOZORDER);
     SendMessageW(GetDlgItem(hwnd,300),WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);SendMessageW(GetDlgItem(hwnd,301),WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);
-    RECT r{0,0,px(375),px(470)};AdjustWindowRectExForDpi(&r,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,FALSE,WS_EX_TOOLWINDOW,GetDpiForWindow(hwnd));
+    for(int row=0;row<2;++row) {
+        const int y=20+(OptionCount+row)*34;
+        SetWindowPos(GetDlgItem(hwnd,302+row*2),nullptr,px(20),px(y),px(190),px(25),SWP_NOZORDER);
+        SetWindowPos(GetDlgItem(hwnd,303+row*2),nullptr,px(210),px(y),px(145),px(150),SWP_NOZORDER);
+        SendDlgItemMessageW(hwnd,302+row*2,WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);
+        SendDlgItemMessageW(hwnd,303+row*2,WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);
+        SendDlgItemMessageW(hwnd,303+row*2,CB_SETDROPPEDWIDTH,px(230),0);
+    }
+    RECT r{0,0,px(375),px(20+OptionCount*34+185)};AdjustWindowRectExForDpi(&r,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,FALSE,WS_EX_TOOLWINDOW,GetDpiForWindow(hwnd));
     SetWindowPos(hwnd,nullptr,0,0,r.right-r.left,r.bottom-r.top,SWP_NOMOVE|SWP_NOZORDER);
 }
 LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
@@ -247,9 +292,24 @@ LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
         }
         CreateWindowW(L"STATIC",L"Changes preview and save automatically.\nWidth expands when needed to fit text.",WS_CHILD|WS_VISIBLE,0,0,0,0,hwnd,reinterpret_cast<HMENU>(300),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Close",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,0,0,0,0,hwnd,reinterpret_cast<HMENU>(301),nullptr,nullptr);
-        SettingsLayout(hwnd); return 0;
+        for(int row=0;row<2;++row) {
+            CreateWindowW(L"STATIC",L"",WS_CHILD|WS_VISIBLE,0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(302+row*2)),nullptr,nullptr);
+            CreateWindowW(L"COMBOBOX",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST|WS_VSCROLL,0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(303+row*2)),nullptr,nullptr);
+        }
+        SendDlgItemMessageW(hwnd,303,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"English"));
+        SendDlgItemMessageW(hwnd,303,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"简体中文"));
+        SendDlgItemMessageW(hwnd,303,CB_SETCURSEL,language,0);
+        UpdateSettingsLanguage(hwnd);SettingsLayout(hwnd); return 0;
     case WM_COMMAND: {
         const int id=LOWORD(w);
+        if((id==303 || id==305) && HIWORD(w)==CBN_SELCHANGE) {
+            const int selected=static_cast<int>(SendDlgItemMessageW(hwnd,id,CB_GETCURSEL,0,0));
+            if(selected>=0 && selected<=1) {
+                if(id==303) language=selected; else usageMode.store(selected);
+                UpdateSettingsLanguage(hwnd);Layout();if(!selfTesting)SaveSettings();
+            }
+            return 0;
+        }
         if(id==301 || id==IDCANCEL) { DestroyWindow(hwnd);return 0; }
         if(id>=100 && id<100+OptionCount && (HIWORD(w)==EN_CHANGE || HIWORD(w)==EN_KILLFOCUS) && settingsHandle) {
             const int i=id-100; BOOL valid=FALSE; const UINT value=GetDlgItemInt(hwnd,id,&valid,FALSE);
@@ -267,6 +327,10 @@ LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
 void ShowSettings() {
     if(!settingsHandle) settingsHandle=CreateWindowExW(WS_EX_TOOLWINDOW,L"CpuFreqSettings",L"CPU Freq Moniter - Settings",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,CW_USEDEFAULT,CW_USEDEFAULT,400,520,windowHandle,nullptr,GetModuleHandleW(nullptr),nullptr);
     ShowWindow(settingsHandle,SW_SHOW);SetForegroundWindow(settingsHandle);
+}
+HMENU CreateTrayMenu(HWND hwnd) {
+    HMENU menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING,1,IsWindowVisible(hwnd)?Tr(L"Hide overlay",L"隐藏浮窗"):Tr(L"Show overlay",L"显示浮窗"));AppendMenuW(menu,MF_STRING,2,Tr(L"Settings",L"打开设置"));AppendMenuW(menu,MF_STRING,3,Tr(L"About",L"关于"));AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,4,Tr(L"Exit",L"退出"));
+    return menu;
 }
 LRESULT CALLBACK WindowProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
     if(activateMessage && message==activateMessage) { ShowWindow(hwnd,SW_SHOWNOACTIVATE); Layout(); SetForegroundWindow(hwnd); return 0; }
@@ -286,11 +350,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
     case TrayMessage:
         if(l==WM_LBUTTONUP) ShowSettings();
         if(l==WM_RBUTTONUP) {
-            HMENU menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING,1,IsWindowVisible(hwnd)?L"Hide overlay":L"Show overlay");AppendMenuW(menu,MF_STRING,2,L"Settings");AppendMenuW(menu,MF_STRING,3,L"About");AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,4,L"Exit");
+            HMENU menu=CreateTrayMenu(hwnd);
             POINT p{};GetCursorPos(&p);SetForegroundWindow(hwnd);const UINT command=static_cast<UINT>(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,hwnd,nullptr));DestroyMenu(menu);PostMessageW(hwnd,WM_NULL,0,0);
             if(command==1) ShowWindow(hwnd,IsWindowVisible(hwnd)?SW_HIDE:SW_SHOWNOACTIVATE);
             if(command==2) ShowSettings();
-            if(command==3) MessageBoxW(hwnd,L"CPU Freq Moniter 1.2.0\nIntel frequency via PawnIO\nTemperature: hottest valid core\nBlue = total CPU time; dark blue = kernel time\nDrag anywhere; double-click to hide.\nMouse wheel scrolls tall overlays.",L"About",MB_OK);
+            if(command==3) MessageBoxW(hwnd,Tr(L"CPU Freq Moniter 1.3.0\nIntel frequency via PawnIO\nTemperature: hottest valid core\nBlue = total; dark blue = kernel portion\nDrag anywhere; double-click to hide.\nMouse wheel scrolls tall overlays.",L"CPU Freq Moniter 1.3.0\n通过 PawnIO 读取 Intel 频率\n温度：最高有效核心温度\n蓝色表示总占用，深蓝色表示其中的内核占用\n任意位置拖动；双击隐藏。\n超高浮窗可用滚轮查看。"),Tr(L"About",L"关于"),MB_OK);
             if(command==4) DestroyWindow(hwnd);
         }return 0;
     case WM_CLOSE:ShowWindow(hwnd,SW_HIDE);return 0;
@@ -320,6 +384,7 @@ int RunMonitor(bool demo, bool selfTest) {
         wchar_t executable[32768]{};GetModuleFileNameW(nullptr,executable,32768);
         std::wstring log(executable);log=log.substr(0,log.find_last_of(L"\\")+1)+(demo?L"ui-test.txt":L"sensor-test.txt");
         FILE* stream=nullptr;_wfreopen_s(&stream,log.c_str(),L"w",stdout);
+        iniPath=log+L".ini";
     }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
@@ -341,6 +406,19 @@ int RunMonitor(bool demo, bool selfTest) {
     while(GetMessageW(&message,nullptr,0,0)>0) {
         if(selfTest && message.message==WM_TIMER && message.wParam==99) {
             KillTimer(windowHandle,99);ShowSettings();
+            SendDlgItemMessageW(settingsHandle,303,CB_SETCURSEL,1,0);
+            SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(303,CBN_SELCHANGE),0);
+            wchar_t translated[64]{};GetWindowTextW(GetDlgItem(settingsHandle,301),translated,64);
+            if(wcscmp(translated,L"关闭")!=0 || language!=1)result=6;
+            HMENU translatedMenu=CreateTrayMenu(windowHandle);GetMenuStringW(translatedMenu,2,translated,64,MF_BYCOMMAND);DestroyMenu(translatedMenu);
+            if(wcscmp(translated,L"打开设置")!=0)result=8;
+            SaveSettings();language=0;usageMode.store(0);ReadPreferences();
+            if(language!=1 || usageMode.load()!=1)result=9;
+            SendDlgItemMessageW(settingsHandle,303,CB_SETCURSEL,0,0);
+            SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(303,CBN_SELCHANGE),0);
+            GetWindowTextW(GetDlgItem(settingsHandle,301),translated,64);if(wcscmp(translated,L"Close")!=0)result=7;
+            translatedMenu=CreateTrayMenu(windowHandle);GetMenuStringW(translatedMenu,2,translated,64,MF_BYCOMMAND);DestroyMenu(translatedMenu);
+            if(wcscmp(translated,L"Settings")!=0)result=10;
             SetWindowTextW(edits[4],L"36");SetWindowTextW(edits[1],L"220");
             if(contentWidth < labelWidth+frequencyWidth+50+2*options[6].value) result=2;
             SetWindowTextW(edits[0],L"1");SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(100,EN_KILLFOCUS),reinterpret_cast<LPARAM>(edits[0]));
@@ -348,7 +426,7 @@ int RunMonitor(bool demo, bool selfTest) {
             SendMessageW(windowHandle,WM_LBUTTONDBLCLK,0,0);if(IsWindowVisible(windowHandle))result=4;
             ShowWindow(windowHandle,SW_SHOWNOACTIVATE);
     ShowWindow(windowHandle,SW_SHOWNOACTIVATE);UpdateWindow(windowHandle);
-            {std::lock_guard<std::mutex> lock(dataMutex);if(preview && (rows[0].total<0 || temperature<0))result=5; std::printf("Sensor mode: %s; temperature=%.1f C\n",preview?"demo":"hardware",temperature); for(std::size_t i=0;i<rows.size();++i) std::printf("Core%zu total=%.2f kernel=%.2f GHz=%.3f\n",i,rows[i].total,rows[i].kernel,rows[i].ghz);}
+            {std::lock_guard<std::mutex> lock(dataMutex);if(preview && (rows[0].total<0 || temperature<0))result=5; std::printf("Sensor mode: %s; temperature=%.1f C\n",preview?"demo":"hardware",temperature); for(std::size_t i=0;i<rows.size();++i) std::printf("Core%zu total=%.2f kernel=%.2f GHz=%.3f time=%.2f utility=%.2f\n",i,rows[i].total,rows[i].kernel,rows[i].ghz,rows[i].time,rows[i].utility);}
             std::printf("UI checks exit=%d\n",result); std::fflush(stdout); DestroyWindow(settingsHandle);DestroyWindow(windowHandle);continue;
         }
         if(!settingsHandle || !IsDialogMessageW(settingsHandle,&message)) {TranslateMessage(&message);DispatchMessageW(&message);}
@@ -356,7 +434,3 @@ int RunMonitor(bool demo, bool selfTest) {
     SetEvent(stopEvent);worker.join();CloseHandle(stopEvent);if(trayIcon)DestroyIcon(trayIcon);if(settingsFont)DeleteObject(settingsFont);
     Release(target);Release(normalFont);Release(titleFont);Release(textFactory);Release(factory);CoUninitialize();return result;
 }
-
-
-
-
