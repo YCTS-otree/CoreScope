@@ -1,23 +1,27 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <winioctl.h>
+#include <intrin.h>
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <cstdio>
-#include <limits>
+#include <cwchar>
 #include <vector>
 
-#include "../shared/protocol.h"
-
-static_assert(sizeof(CPU_FREQ_ENTRY) == 24);
-static_assert(CPU_FREQ_RESPONSE_HEADER_SIZE == 24);
+#include "pawnio_client.h"
 
 namespace {
 constexpr DWORD SAMPLE_INTERVAL_MS = 1000;
+constexpr std::uint32_t IA32_PERF_STATUS = 0x198;
 std::atomic_bool g_stopRequested{false};
 HANDLE g_stopEvent = nullptr;
+
+struct ProcessorLocation {
+    WORD Group;
+    BYTE Number;
+};
 
 BOOL WINAPI ConsoleControlHandler(DWORD controlType)
 {
@@ -46,24 +50,95 @@ void PrintError(const char* message, DWORD status)
     std::printf(" %s: 0x%08lX\n", message, status);
     std::fflush(stdout);
 }
+
+bool GetModulePath(std::array<wchar_t, MAX_PATH>& path, DWORD& error)
+{
+    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size()) {
+        error = GetLastError();
+        if (error == ERROR_SUCCESS) error = ERROR_INSUFFICIENT_BUFFER;
+        return false;
+    }
+    wchar_t* separator = wcsrchr(path.data(), L'\\');
+    if (separator == nullptr) {
+        error = ERROR_INVALID_NAME;
+        return false;
+    }
+    *separator = L'\0';
+    if (wcscat_s(path.data(), path.size(), L"\\IntelMSR.bin") != 0) {
+        error = ERROR_INSUFFICIENT_BUFFER;
+        return false;
+    }
+    error = ERROR_SUCCESS;
+    return true;
+}
+
+bool GetBusFrequencyMHz(std::uint32_t& busFrequencyMHz)
+{
+    int registers[4]{};
+    __cpuid(registers, 0);
+    const int maximumLeaf = registers[0];
+    if (registers[1] != 0x756e6547 || registers[3] != 0x49656e69 || registers[2] != 0x6c65746e) {
+        return false;
+    }
+
+    // Modern Intel client processors use a nominal 100 MHz reference clock.
+    // Prefer CPUID.16H ECX when the platform exposes it, otherwise use that
+    // architectural platform default (some firmware/hypervisors hide leaf 16H).
+    busFrequencyMHz = 100;
+    if (maximumLeaf >= 0x16) {
+        __cpuidex(registers, 0x16, 0);
+        if (registers[2] > 0 && registers[2] <= 1000) {
+            busFrequencyMHz = static_cast<std::uint32_t>(registers[2]);
+        }
+    }
+    return true;
+}
+
+std::vector<ProcessorLocation> EnumerateProcessors()
+{
+    std::vector<ProcessorLocation> processors;
+    const WORD groupCount = GetActiveProcessorGroupCount();
+    for (WORD group = 0; group < groupCount; ++group) {
+        const DWORD count = GetActiveProcessorCount(group);
+        for (DWORD number = 0; number < count && number < sizeof(KAFFINITY) * 8; ++number) {
+            processors.push_back({group, static_cast<BYTE>(number)});
+        }
+    }
+    return processors;
+}
 } // namespace
 
-int main()
+int wmain(int argc, wchar_t* argv[])
 {
-    const DWORD processorCount = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
-    if (processorCount == 0 || processorCount >
-        (std::numeric_limits<DWORD>::max() - CPU_FREQ_RESPONSE_HEADER_SIZE) / sizeof(CPU_FREQ_ENTRY)) {
+    const bool runOnce = argc == 2 && wcscmp(argv[1], L"--once") == 0;
+    if (argc > 1 && !runOnce) {
+        std::printf("Usage: Cpu_freq_Moniter_v1.1.1.exe [--once]\n");
+        return 2;
+    }
+
+    std::uint32_t busFrequencyMHz = 0;
+    if (!GetBusFrequencyMHz(busFrequencyMHz)) {
+        PrintError("Only Intel x64 processors are supported", ERROR_NOT_SUPPORTED);
+        return 1;
+    }
+
+    const std::vector<ProcessorLocation> processors = EnumerateProcessors();
+    if (processors.empty()) {
         PrintError("Cannot enumerate logical processors", GetLastError());
         return 1;
     }
 
-    const std::size_t responseSize = CPU_FREQ_RESPONSE_HEADER_SIZE +
-        static_cast<std::size_t>(processorCount) * sizeof(CPU_FREQ_ENTRY);
-    std::vector<std::uint8_t> buffer(responseSize);
-    HANDLE device = CreateFileW(L"\\\\.\\CpuFreqMonitor", GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (device == INVALID_HANDLE_VALUE) {
-        PrintError("Cannot open CpuFreqMonitor driver (run install.cmd as administrator)", GetLastError());
+    std::array<wchar_t, MAX_PATH> modulePath{};
+    DWORD error = ERROR_SUCCESS;
+    if (!GetModulePath(modulePath, error)) {
+        PrintError("Cannot locate IntelMSR.bin", error);
+        return 1;
+    }
+
+    PawnIoClient pawnIo;
+    if (!pawnIo.OpenAndLoad(modulePath.data(), error)) {
+        PrintError("Cannot initialize PawnIO (install the official signed PawnIO driver)", error);
         return 1;
     }
 
@@ -71,48 +146,47 @@ int main()
     if (g_stopEvent == nullptr || !SetConsoleCtrlHandler(ConsoleControlHandler, TRUE)) {
         PrintError("Cannot initialize Ctrl+C handling", GetLastError());
         if (g_stopEvent != nullptr) CloseHandle(g_stopEvent);
-        CloseHandle(device);
         g_stopEvent = nullptr;
         return 1;
     }
 
     while (!g_stopRequested.load(std::memory_order_relaxed)) {
-        DWORD bytesReturned = 0;
-        const BOOL succeeded = DeviceIoControl(device, static_cast<DWORD>(CPU_FREQ_IOCTL_GET_FREQUENCIES),
-            nullptr, 0, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesReturned, nullptr);
-        if (!succeeded) {
-            PrintError("Driver query failed", GetLastError());
-        } else if (bytesReturned < CPU_FREQ_RESPONSE_HEADER_SIZE) {
-        PrintError("Driver returned malformed data", static_cast<DWORD>(ERROR_INVALID_DATA));
-        } else {
-            const auto* response = reinterpret_cast<const CPU_FREQ_RESPONSE*>(buffer.data());
-            const std::size_t expectedSize = CPU_FREQ_RESPONSE_HEADER_SIZE +
-                static_cast<std::size_t>(response->ProcessorCount) * sizeof(CPU_FREQ_ENTRY);
-            if (response->Version != CPU_FREQ_PROTOCOL_VERSION || response->Size != bytesReturned ||
-                expectedSize != bytesReturned) {
-                PrintError("Driver protocol mismatch", static_cast<DWORD>(ERROR_REVISION_MISMATCH));
+        PrintTimestamp();
+        const int labelWidth = processors.size() >= 100 ? 3 : 2;
+        for (std::size_t i = 0; i < processors.size(); ++i) {
+            const ProcessorLocation processor = processors[i];
+            GROUP_AFFINITY requested{};
+            GROUP_AFFINITY previous{};
+            requested.Group = processor.Group;
+            requested.Mask = static_cast<KAFFINITY>(1) << processor.Number;
+
+            std::uint64_t perfStatus = 0;
+            DWORD readError = ERROR_SUCCESS;
+            if (!SetThreadGroupAffinity(GetCurrentThread(), &requested, &previous)) {
+                readError = GetLastError();
             } else {
-                PrintTimestamp();
-                const int labelWidth = response->ProcessorCount >= 100 ? 3 : 2;
-                for (UINT32 i = 0; i < response->ProcessorCount; ++i) {
-                    const CPU_FREQ_ENTRY& entry = response->Entries[i];
-                    if (entry.Valid != 0) {
-                        std::printf(" CPU%0*u=%lu MHz ", labelWidth, i,
-                            static_cast<unsigned long>(entry.FrequencyMHz));
-                    } else {
-                        std::printf(" CPU%0*u=N/A ", labelWidth, i);
-                    }
+                pawnIo.ReadMsr(IA32_PERF_STATUS, perfStatus, readError);
+                if (!SetThreadGroupAffinity(GetCurrentThread(), &previous, nullptr) && readError == ERROR_SUCCESS) {
+                    readError = GetLastError();
                 }
-                std::printf("\n");
-                std::fflush(stdout);
+            }
+
+            const std::uint32_t ratio = static_cast<std::uint32_t>((perfStatus >> 8) & 0xffu);
+            if (readError == ERROR_SUCCESS && ratio != 0) {
+                std::printf(" CPU%0*zu=%lu MHz ", labelWidth, i,
+                    static_cast<unsigned long>(ratio * busFrequencyMHz));
+            } else {
+                std::printf(" CPU%0*zu=N/A ", labelWidth, i);
             }
         }
+        std::printf("\n");
+        std::fflush(stdout);
+        if (runOnce) break;
         if (WaitForSingleObject(g_stopEvent, SAMPLE_INTERVAL_MS) == WAIT_OBJECT_0) break;
     }
 
     SetConsoleCtrlHandler(ConsoleControlHandler, FALSE);
     CloseHandle(g_stopEvent);
-    CloseHandle(device);
     g_stopEvent = nullptr;
     return 0;
 }

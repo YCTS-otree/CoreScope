@@ -4,8 +4,6 @@ VisualStudioVersion = 18.0.12105.275
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "CpuFreq", "app\CpuFreq.vcxproj", "{2879A9E2-12D1-41DD-965E-88B054BB8AA8}"
 EndProject
-Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "CpuFreqDrv", "driver\CpuFreqDrv.vcxproj", "{76080BB2-CB75-43C1-990A-C2E4BA528A77}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Release|x64 = Release|x64
@@ -13,7 +11,5 @@ Global
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{2879A9E2-12D1-41DD-965E-88B054BB8AA8}.Release|x64.ActiveCfg = Release|x64
 		{2879A9E2-12D1-41DD-965E-88B054BB8AA8}.Release|x64.Build.0 = Release|x64
-		{76080BB2-CB75-43C1-990A-C2E4BA528A77}.Release|x64.ActiveCfg = Release|x64
-		{76080BB2-CB75-43C1-990A-C2E4BA528A77}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 EndGlobal

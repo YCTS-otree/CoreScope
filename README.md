@@ -1,49 +1,52 @@
-# CPU Frequency Monitor 1.0.0
+# CPU Frequency Monitor 1.1.1
 
-Windows 10/11 x64 上的 Intel CPU 每逻辑处理器主频监视器。此版本不再使用 PerfLib；内核驱动在对应逻辑处理器上读取 `IA32_PERF_STATUS`（MSR `0x198`），用户态 CLI 每秒显示一次当前倍频乘以 CPUID 报告的总线频率。
+Windows 10/11 x64 上的 Intel CPU 每逻辑处理器主频监视器。程序通过已获
+Microsoft 硬件兼容签名的 PawnIO 驱动加载官方 `IntelMSR.bin` 模块，在各逻辑
+处理器上读取 `IA32_PERF_STATUS`（MSR `0x198`），不再携带自行开发的 `.sys`
+驱动，也不需要开启测试模式。
 
-## 限制与安全设计
+## 运行要求
 
-- 当前版本仅支持 Intel CPU，并要求 CPUID leaf `0x16` 提供总线频率。
-- 驱动 IOCTL 只返回固定的频率结构，不接受 MSR 编号，也不提供任意 MSR 读写。
-- 安装、启动和卸载内核驱动需要管理员权限；驱动正常运行后，普通用户可打开只读查询接口。
-- x64 Windows 必须接受驱动签名。开发构建需要测试签名和启用测试模式；公开分发需要 Microsoft 签名。
-- `IA32_PERF_STATUS` 是瞬时性能状态读数，不是基于 `IA32_APERF/IA32_MPERF` 时间差计算的 Effective Clock。
+- Intel x64 CPU；当前针对现代 Intel 客户端平台的 100 MHz 基准时钟。
+- Windows 10/11 x64。
+- 安装 PawnIO 2.x 官方签名版：https://pawnio.eu/
+- 程序启动时需要管理员授权，这是 PawnIO 的设备访问策略。
+- `Cpu_freq_Moniter_v1.1.1.exe` 与 `IntelMSR.bin` 必须放在同一目录。
+
+本项目不会使用 CPU-Z、RTCore64 等第三方软件的私有或高风险驱动接口。
+PawnIO 驱动会验证模块签名；官方 Intel 模块只允许访问明确列入白名单的 MSR。
 
 ## 构建
 
-要求：
-
-- Visual Studio 2026 Build Tools，Desktop development with C++
-- Windows SDK 10.0.28000
-- Windows Driver Kit 10.0.28000
+要求：Visual Studio 2026 Build Tools、Windows SDK 10.0.28000。自有驱动已经
+移除，因此构建应用本身不再要求 WDK。
 
 ```powershell
 msbuild CpuFreq.sln /m /t:Rebuild /p:Configuration=Release /p:Platform=x64
 ```
 
-构建输出在 `build\x64\Release`。正式发布目录为 `Release\v1.0.0`，只包含运行所需文件和文档。
-
-## 安装与使用
-
-驱动必须先具备 Windows 可接受的签名。随后在管理员命令提示符中运行：
+构建输出在 `build\x64\Release`。程序持续每秒采样，按 `Ctrl+C` 退出：
 
 ```text
-install.cmd
+Cpu_freq_Moniter_v1.1.1.exe
 ```
 
-再运行：
+只采样一次后退出：
 
 ```text
-Cpu_freq_Moniter_v1.0.0.exe
+Cpu_freq_Moniter_v1.1.1.exe --once
 ```
 
-按 `Ctrl+C` 正常退出。卸载驱动时，在管理员命令提示符运行 `uninstall.cmd`。
-
-## 输出
+输出示例：
 
 ```text
 [12:34:56.789] CPU00=5200 MHz  CPU01=5200 MHz  CPU02=4900 MHz
 ```
 
-内部保留 Windows Processor Group 与组内处理器编号，显示时按组和组内编号扁平化为 CPU00、CPU01……。
+`IA32_PERF_STATUS` 是瞬时倍频读数，不是基于 `IA32_APERF/IA32_MPERF` 时间差
+计算的 Effective Clock。
+
+## 第三方组件
+
+`third_party/PawnIO.Modules/IntelMSR.bin` 来自 PawnIO.Modules 0.2.11 官方发布，
+采用 GNU LGPL 2.1-or-later。详情见同目录的 `README.md` 和 `COPYING`。
