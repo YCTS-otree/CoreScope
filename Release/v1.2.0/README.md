@@ -1,0 +1,70 @@
+# CPU Frequency Monitor 1.2.0
+
+Windows 10/11 x64 的 Intel CPU 桌面浮窗监视器。使用原生 Win32、Direct2D 和
+DirectWrite 绘制界面，通过 PawnIO 官方签名驱动读取每逻辑处理器的瞬时频率。
+
+## 使用
+
+运行 `Release/v1.2.0/Cpu_freq_Moniter_v1.2.0.exe`，按提示允许管理员权限。
+`IntelMSR.bin` 必须与 exe 位于同一目录。需要安装 PawnIO 2.x 官方签名版。
+
+- 每行对应一个逻辑处理器；蓝色长度表示总使用时间比例，深蓝色覆盖其中的
+  内核时间比例，两者不相加。未填充部分表示空闲。
+- 频率以 GHz 显示；温度是所有有效核心读数中的最高温度。
+- 浮窗任意位置可拖动，双击隐藏。高度超过屏幕时可用滚轮查看剩余内容。
+- 托盘图标单击打开设置；右键提供显示/隐藏、设置、关于、退出。
+- 再次启动会通过单实例 IPC 显示已有浮窗，新进程退出。
+- 设置即时预览并保存到 `%LOCALAPPDATA%/CpuFreqMonitor/settings.ini`，位置也会保存。
+- 无法访问硬件或计数器时显示 N/A，不以模拟读数代替真实数据。
+
+## 可调设置
+
+| 设置 | 默认值 | 范围 |
+| --- | --- | --- |
+| 不透明度 | 92% | 15–100% |
+| 窗口宽度 | 340 DIP | 220–1200 DIP |
+| 行距 | 5 DIP | 0–40 DIP |
+| 标题字号 | 19 DIP | 10–48 DIP |
+| 条目字号 | 13 DIP | 8–36 DIP |
+| 使用率条高 | 12 DIP | 2–48 DIP |
+| 内边距 | 14 DIP | 4–48 DIP |
+| 圆角半径 | 12 DIP | 0–40 DIP |
+| 采样间隔 | 1000 ms | 250–5000 ms |
+| 置顶 | 1 | 0 / 1 |
+
+DIP 为 100% 缩放时的像素大小，跟随显示器 DPI 缩放。为避免文字与进度条重叠，
+实际宽度会在所设宽度不足时自动增大。无效输入在离开输入框时恢复上次有效值。
+
+## 数据来源
+
+- 频率：PawnIO + Intel `IA32_PERF_STATUS`，优先 CPUID.16H 提供的总线频率，
+  未提供时采用现代 Intel 客户端平台的 100 MHz 基准。属于瞬时倍频，非 Effective Clock。
+- 占用率：Windows PDH `Processor Information` 的 `% Processor Time` 和
+  `% Privileged Time`；按 Processor Group 与逻辑处理器编号匹配。
+- 温度：Intel `IA32_THERM_STATUS` 的有效温差与 `IA32_TEMPERATURE_TARGET`
+  的 TjMax 计算，不支持或读取失败时显示 N/A。
+- P/E/SuperP 识别计划在后续版本实现，当前不自动分类。
+
+## 构建与验证
+
+需要 Visual Studio 2026 Build Tools（v145）、Windows SDK 10.0.28000 和 C++17。
+使用系统现有工具，无需 WDK 或额外 UI 框架。
+
+```powershell
+msbuild CpuFreq.sln /m /t:Rebuild /p:Configuration=Release /p:Platform=x64
+```
+
+开发输出位于 `build/x64/Release`，分发文件位于 `Release/v1.2.0`。
+
+- `--once`：一次频率采样，保留命令行兼容用途；从脚本捕获输出时需管理员权限。
+- `--demo`：明确标有 DEMO 的模拟传感器预览；与正常 UI 共享单实例锁。
+- `--ui-test`：独立运行模拟数据 UI 自检，不创建托盘、不写用户配置，完成后退出。
+- `--sensor-test`：同样执行 UI 自检，并记录真实传感器读数。
+
+两种自检将日志写入可执行文件旁的 `ui-test.txt` / `sensor-test.txt`，需要该目录可写。
+不要把自检日志纳入分发目录。测试覆盖与限制见 `TEST_RESULTS.md`。
+
+## 第三方组件
+
+`IntelMSR.bin` 来自 PawnIO.Modules 0.2.11 官方发布，采用 GNU LGPL 2.1-or-later。
+分发目录包含其许可和来源说明。PawnIO 驱动需单独安装：https://pawnio.eu/

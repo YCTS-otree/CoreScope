@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "pawnio_client.h"
+#include "monitor.h"
 
 namespace {
 constexpr DWORD SAMPLE_INTERVAL_MS = 1000;
@@ -111,9 +112,13 @@ std::vector<ProcessorLocation> EnumerateProcessors()
 
 int wmain(int argc, wchar_t* argv[])
 {
+    if (argc == 2 && wcscmp(argv[1], L"--sensor-test") == 0) return RunMonitor(false, true);
+    if (argc == 1 || (argc == 2 && wcscmp(argv[1], L"--demo") == 0) || (argc == 2 && wcscmp(argv[1], L"--ui-test") == 0)) {
+        return RunMonitor(argc == 2, argc == 2 && wcscmp(argv[1], L"--ui-test") == 0);
+    }
     const bool runOnce = argc == 2 && wcscmp(argv[1], L"--once") == 0;
     if (argc > 1 && !runOnce) {
-        std::printf("Usage: Cpu_freq_Moniter_v1.1.1.exe [--once]\n");
+        std::printf("Usage: Cpu_freq_Moniter_v1.2.0.exe [--once | --demo | --ui-test | --sensor-test]\n");
         return 2;
     }
 
