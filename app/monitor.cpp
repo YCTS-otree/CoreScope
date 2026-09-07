@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <shellapi.h>
+#include <commctrl.h>
 #include <shlobj.h>
 #include <d2d1.h>
 #include <dwrite.h>
@@ -36,7 +37,7 @@ Option options[] = {
     {L"Bar", L"Bar height (DIP)", 12, 2, 48},
     {L"Padding", L"Window padding (DIP)", 14, 4, 48},
     {L"Radius", L"Corner radius (DIP)", 12, 0, 40},
-    {L"RefreshV2", L"Sample interval (ms)", 250, 100, 5000},
+    {L"RefreshHz", L"Refresh rate (Hz)", 4, 1, 10},
     {L"Topmost", L"Always on top (0 / 1)", 1, 0, 1}
 };
 constexpr int OptionCount = static_cast<int>(sizeof(options) / sizeof(options[0]));
@@ -66,6 +67,7 @@ double publishedAt=0;
 std::uint64_t sampleIoctls=0;
 double bandwidthReadSum=0,bandwidthWriteSum=0,bandwidthReadMax=0,bandwidthWriteMax=0;unsigned bandwidthSamples=0;
 int benchmarkSeconds=0;
+std::atomic<bool> memoryLifecyclePassed{true};
 std::atomic<bool> samplePending{false};
 float ipcWidth=0, busyWidth=0, temperatureColumnWidth=0;
 ID2D1SolidColorBrush *textBrush=nullptr,*mutedBrush=nullptr,*backgroundBrush=nullptr,*blueBrush=nullptr,*kernelBrush=nullptr,*orangeBrush=nullptr,*redBrush=nullptr;
@@ -85,9 +87,32 @@ int savedX = CW_USEDEFAULT, savedY = CW_USEDEFAULT;
 bool preview = false;
 bool selfTesting = false;
 int language = 0;
+bool detailed=true;
+std::wstring cpuTitle;
+struct ContentOption { const wchar_t* key; const wchar_t* en; const wchar_t* zh; bool enabled; };
+ContentOption contents[] = {
+    {L"ShowIPC",L"IPC",L"IPC",false},
+    {L"ShowRAM",L"RAM R/W",L"RAM R/W",true},
+    {L"ShowLLC",L"LLC MPKI",L"LLC MPKI",false},
+    {L"ShowFrequency",L"Frequency",L"频率",true},
+    {L"ShowTemperature",L"Temperature",L"温度",true},
+    {L"ShowPower",L"Package power (detailed)",L"封装功耗（详细模式）",true}
+};
+constexpr int ContentCount=static_cast<int>(sizeof(contents)/sizeof(contents[0]));
+std::atomic<bool> memoryEnabled{true};
+int settingsTab=0;
+float CoreRowHeight(CoreKind kind) {
+    return (std::max)(textHeight,static_cast<float>(options[5].value)) + (detailed && kind==CoreKind::Performance?0.0f:static_cast<float>(options[2].value));
+}
+void ApplyPreset(int preset) {
+    const int smallPreset[]={92,280,3,16,11,10,10,10};
+    const int normal[]={92,340,5,19,13,12,14,12};
+    for(int i=1;i<8;++i)options[i].value=preset==0?smallPreset[i]:normal[i];
+}
+
 std::atomic<int> usageMode{0};
 const wchar_t* Tr(const wchar_t* en, const wchar_t* zh) { return language == 1 ? zh : en; }
-const wchar_t* chineseLabels[] = {L"不透明度 (%)", L"窗口宽度 (DIP)", L"行间距 (DIP)", L"标题字号 (DIP)", L"条目字号 (DIP)", L"进度条高度 (DIP)", L"窗口内边距 (DIP)", L"圆角半径 (DIP)", L"采样间隔 (ms)", L"始终置顶 (0 / 1)"};
+const wchar_t* chineseLabels[] = {L"不透明度 (%)", L"窗口宽度 (DIP)", L"行间距 (DIP)", L"标题字号 (DIP)", L"条目字号 (DIP)", L"进度条高度 (DIP)", L"窗口内边距 (DIP)", L"圆角半径 (DIP)", L"刷新率 (Hz)", L"始终置顶 (0 / 1)"};
 
 
 template<class T> void Release(T*& object) { if (object) { object->Release(); object = nullptr; } }
@@ -98,12 +123,16 @@ void SaveSettings() {
     for (const auto& o : options) WritePrivateProfileStringW(L"UI", o.key, Number(o.value).c_str(), iniPath.c_str());
     WritePrivateProfileStringW(L"UI", L"Language", language ? L"zh-CN" : L"en", iniPath.c_str());
     WritePrivateProfileStringW(L"UI", L"BusyModeV2", Number(usageMode.load()).c_str(), iniPath.c_str());
+    WritePrivateProfileStringW(L"UI",L"Detailed",detailed?L"1":L"0",iniPath.c_str());
+    for(const auto& c:contents)WritePrivateProfileStringW(L"UI",c.key,c.enabled?L"1":L"0",iniPath.c_str());
     RECT rect{}; GetWindowRect(windowHandle, &rect);
     WritePrivateProfileStringW(L"UI", L"X", Number(rect.left).c_str(), iniPath.c_str());
     WritePrivateProfileStringW(L"UI", L"Y", Number(rect.top).c_str(), iniPath.c_str());
 }
 void ReadPreferences() {
     for (auto& o : options) o.value = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"UI", o.key, o.value, iniPath.c_str())), o.minimum, o.maximum);
+    detailed=GetPrivateProfileIntW(L"UI",L"Detailed",1,iniPath.c_str())!=0;
+    for(auto& c:contents)c.enabled=GetPrivateProfileIntW(L"UI",c.key,c.enabled?1:0,iniPath.c_str())!=0;
     wchar_t selectedLanguage[16]{};
     GetPrivateProfileStringW(L"UI", L"Language", PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE ? L"zh-CN" : L"en", selectedLanguage, 16, iniPath.c_str());
     language = wcscmp(selectedLanguage,L"zh-CN") == 0 ? 1 : 0;
@@ -131,20 +160,32 @@ void Layout() {
     textFactory->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, static_cast<float>(options[3].value), L"en-us", &titleFont);
     if (!normalFont || !titleFont) return;
     normalFont->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP); titleFont->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
-    titleHeight = Measure(topology.name, titleFont).height;
-    textHeight = Measure(Tr(L"Temperature: 100.0 \u00b0C",L"温度: 100.0 \u00b0C"), normalFont).height;
+    titleHeight = Measure(cpuTitle, titleFont).height;
+    textHeight = Measure(L"Temperature: 100.0 \u00b0C", normalFont).height;
     labelWidth = Measure(L"Core" + Number(static_cast<int>(processorCount) - 1), normalFont).width + 10;
-    frequencyWidth = Measure(L"00.00G", normalFont).width + 12;
-    temperatureColumnWidth=Measure(L"100°",normalFont).width+8;ipcWidth=Measure(L"N/A",normalFont).width+12;busyWidth=Measure(L"100%",normalFont).width+12;
+    frequencyWidth = contents[3].enabled?Measure(detailed?L"00.00G":L"0.0 GHz", normalFont).width + 12:0;
+    temperatureColumnWidth=Measure(L"100°",normalFont).width+8;ipcWidth=contents[0].enabled?Measure(L"N/A",normalFont).width+12:0;busyWidth=detailed?Measure(L"100%",normalFont).width+12:0;
     const float padding = static_cast<float>(options[6].value);
-    contentWidth = (std::max)({static_cast<float>(options[1].value), labelWidth + frequencyWidth + ipcWidth + busyWidth + 70 + 2 * padding, Measure(topology.name, titleFont).width + 2 * padding, Measure(Tr(L"Temperature: 100.0 \u00b0C",L"温度: 100.0 \u00b0C"), normalFont).width + 2 * padding});
+    contentWidth = (std::max)({static_cast<float>(options[1].value), labelWidth + frequencyWidth + ipcWidth + busyWidth + 70 + 2 * padding, Measure(cpuTitle, titleFont).width + 2 * padding, Measure(L"Temperature: 100.0 \u00b0C", normalFont).width + 2 * padding});
+    if(detailed && contents[4].enabled)for(const auto& group:displayGroups)contentWidth=(std::max)(contentWidth,Measure(CoreKindName(group.kind),normalFont).width+40+temperatureColumnWidth*static_cast<float>(group.physical.size())+2*padding);
     rowHeight = (std::max)(textHeight, static_cast<float>(options[5].value)) + static_cast<float>(options[2].value);
 
     RECT current{}; GetWindowRect(windowHandle, &current);
     MONITORINFO monitor{sizeof(monitor)}; GetMonitorInfoW(MonitorFromWindow(windowHandle, MONITOR_DEFAULTTONEAREST), &monitor);
     contentWidth=(std::min)(contentWidth,static_cast<float>(monitor.rcWork.right-monitor.rcWork.left)/scale);
-    titleHeight=Measure(topology.name,titleFont,contentWidth-2*padding).height;
-    contentHeight=padding*2+titleHeight+12+textHeight*2+rowHeight*static_cast<float>(processorCount)+(textHeight+10)*static_cast<float>(displayGroups.size())+textHeight*6+20;
+    titleHeight=Measure(cpuTitle,titleFont,contentWidth-2*padding).height;
+    contentHeight=padding*2+titleHeight+8;
+    if(detailed) {
+        if(contents[4].enabled || contents[5].enabled)contentHeight+=textHeight+6;
+        contentHeight+=textHeight+4;
+        for(const auto& group:displayGroups){contentHeight+=textHeight+10;for(auto core:group.physical)contentHeight+=CoreRowHeight(group.kind)*static_cast<float>(topology.cores[core].siblings.size());}
+    } else {
+        contentHeight+=rowHeight*static_cast<float>(processorCount);
+        if(contents[4].enabled)contentHeight+=textHeight+4;
+    }
+    if(contents[1].enabled)contentHeight+=(textHeight+4)*2;
+    if(contents[2].enabled)contentHeight+=textHeight+4;
+    if(preview)contentHeight+=textHeight+4;
     const int width=Px(contentWidth);
     const int height = (std::min)(Px(contentHeight), static_cast<int>(monitor.rcWork.bottom - monitor.rcWork.top));
     const int x = std::clamp(current.left, monitor.rcWork.left, monitor.rcWork.right - width);
@@ -154,7 +195,8 @@ void Layout() {
     HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
     if (!SetWindowRgn(windowHandle, region, TRUE)) DeleteObject(region);
     SetLayeredWindowAttributes(windowHandle, 0, static_cast<BYTE>(options[0].value * 255 / 100), LWA_ALPHA);
-    interval.store(options[8].value);
+    interval.store(1000/options[8].value);
+    memoryEnabled.store(contents[1].enabled);
     scrollOffset = std::clamp(scrollOffset, 0, (std::max)(0, Px(contentHeight) - height));
     InvalidateRect(windowHandle, nullptr, FALSE);
 }
@@ -175,42 +217,50 @@ void Paint() {
         auto format=[](double value,const wchar_t* pattern){wchar_t text[96]{};if(value<0)wcscpy_s(text,L"N/A");else swprintf_s(text,pattern,value);return std::wstring(text);};
         const float p=static_cast<float>(options[6].value),width=contentWidth-2*p;
         const float ipcX=contentWidth-p-ipcWidth,freqX=ipcX-frequencyWidth,busyX=freqX-busyWidth,barX=p+labelWidth,barRight=busyX-8;
-        DrawTextLine(topology.name,titleFont,p,p,width,titleHeight+2,textBrush);
+        DrawTextLine(cpuTitle,titleFont,p,p,width,titleHeight+2,textBrush);
         float y=p+titleHeight+8;
-        const std::wstring powerText=format(sensors.packageWatts,L"%.1f W");
-        const float powerColumn=Measure(L"999.9 W",normalFont).width+20,packageLabel=Measure(L"Package: ",normalFont).width;
-        DrawTextLine(powerText,normalFont,p,y,powerColumn,textHeight+2,textBrush);
-        DrawTextLine(L"Package: ",normalFont,p+powerColumn,y,packageLabel,textHeight+2,mutedBrush);
-        DrawTextLine(format(sensors.packageTemperature,L"%.1f \u00b0C"),normalFont,p+powerColumn+packageLabel,y,width-powerColumn-packageLabel,textHeight+2,color(packageAlert));y+=textHeight+6;
-        DrawTextLine(usageMode.load()?L"Utility":L"Busy Time",normalFont,p,y,busyX-p,textHeight+2,mutedBrush);
-        DrawTextLine(L"Freq",normalFont,freqX,y,frequencyWidth,textHeight+2,mutedBrush);DrawTextLine(L"IPC",normalFont,ipcX,y,ipcWidth,textHeight+2,mutedBrush);y+=textHeight+4;
-        for(const auto& group:displayGroups){
-            std::wstring label=CoreKindName(group.kind);if(group.physical.size()==1)label+=L" "+Number(static_cast<int>(group.physical.front()));
-            DrawTextLine(label,normalFont,p,y,labelWidth+75,textHeight+2,mutedBrush);
-            float temperatureX=contentWidth-p;
-            for(auto it=group.physical.rbegin();it!=group.physical.rend();++it){const auto core=*it;const auto value=core<sensors.cores.size()?sensors.cores[core].temperature:-1;const auto tempText=format(value,L"%.0f\u00b0");const float w=temperatureColumnWidth;temperatureX-=w;DrawTextLine(tempText,normalFont,temperatureX,y,w,textHeight+2,color(core<alerts.size()?alerts[core]:0));}
-            y+=textHeight+6;
-            for(const auto physical:group.physical)for(const auto i:topology.cores[physical].siblings){
-                const auto& row=snapshot[i];const float h=rowHeight-static_cast<float>(options[2].value),textY=y+(h-textHeight)/2;
-                DrawTextLine(Number(static_cast<int>(i)),normalFont,p,textY,labelWidth,textHeight+2,mutedBrush);
-                const float top=y+(h-static_cast<float>(options[5].value))/2,bottom=top+static_cast<float>(options[5].value);
-                target->FillRectangle(D2D1::RectF(barX,top,barRight,bottom),backgroundBrush);
-                if(row.total>=0)target->FillRectangle(D2D1::RectF(barX,top,barX+(barRight-barX)*static_cast<float>(row.total/100),bottom),row.busyAlert?color(row.busyAlert):blueBrush);
-                if(row.kernel>=0)target->FillRectangle(D2D1::RectF(barX,top,barX+(barRight-barX)*static_cast<float>(row.kernel/100),bottom),kernelBrush);
-                DrawTextLine(format(row.total,L"%.0f%%"),normalFont,busyX,textY,busyWidth,textHeight+2,color(row.busyAlert));
-                DrawTextLine(format(row.ghz,L"%.2fG"),normalFont,freqX,textY,frequencyWidth,textHeight+2,textBrush);
-                DrawTextLine(L"N/A",normalFont,ipcX,textY,ipcWidth,textHeight+2,mutedBrush);y+=rowHeight;
-            }y+=4;
+        auto drawRow=[&](std::size_t i,CoreKind kind){
+            const auto& row=snapshot[i];
+            const float h=(std::max)(textHeight,static_cast<float>(options[5].value)),textY=y+(h-textHeight)/2;
+            DrawTextLine(detailed?Number(static_cast<int>(i)):L"Core"+Number(static_cast<int>(i)),normalFont,p,textY,labelWidth,textHeight+2,mutedBrush);
+            const float barHeight=detailed && kind==CoreKind::Performance?h:static_cast<float>(options[5].value);
+            const float top=y+(h-barHeight)/2,bottom=top+barHeight;
+            target->FillRectangle(D2D1::RectF(barX,top,barRight,bottom),backgroundBrush);
+            if(row.total>=0)target->FillRectangle(D2D1::RectF(barX,top,barX+(barRight-barX)*static_cast<float>(row.total/100),bottom),row.busyAlert?color(row.busyAlert):blueBrush);
+            if(row.kernel>=0)target->FillRectangle(D2D1::RectF(barX,top,barX+(barRight-barX)*static_cast<float>(row.kernel/100),bottom),kernelBrush);
+            if(detailed)DrawTextLine(format(row.total,L"%.0f%%"),normalFont,busyX,textY,busyWidth,textHeight+2,color(row.busyAlert));
+            if(contents[3].enabled)DrawTextLine(format(row.ghz,detailed?L"%.2fG":L"%.1f GHz"),normalFont,freqX,textY,frequencyWidth,textHeight+2,textBrush);
+            if(contents[0].enabled)DrawTextLine(L"N/A",normalFont,ipcX,textY,ipcWidth,textHeight+2,mutedBrush);
+            y+=CoreRowHeight(kind);
+        };
+        if(detailed){
+            if(contents[4].enabled || contents[5].enabled){
+                float x=p;
+                if(contents[5].enabled){const float w=Measure(L"999.9 W",normalFont).width+20;DrawTextLine(format(sensors.packageWatts,L"%.1f W"),normalFont,x,y,w,textHeight+2,textBrush);x+=w;}
+                if(contents[4].enabled){const float w=Measure(L"Package: ",normalFont).width;DrawTextLine(L"Package: ",normalFont,x,y,w,textHeight+2,mutedBrush);DrawTextLine(format(sensors.packageTemperature,L"%.1f °C"),normalFont,x+w,y,contentWidth-p-x-w,textHeight+2,color(packageAlert));}
+                y+=textHeight+6;
+            }
+            DrawTextLine(usageMode.load()?L"Utility":L"Busy Time",normalFont,p,y,busyX-p,textHeight+2,mutedBrush);
+            if(contents[3].enabled)DrawTextLine(L"Freq",normalFont,freqX,y,frequencyWidth,textHeight+2,mutedBrush);
+            if(contents[0].enabled)DrawTextLine(L"IPC",normalFont,ipcX,y,ipcWidth,textHeight+2,mutedBrush);
+            y+=textHeight+4;
+            for(const auto& group:displayGroups){
+                std::wstring label=CoreKindName(group.kind);if(group.physical.size()==1)label+=L" "+Number(static_cast<int>(group.physical.front()));
+                DrawTextLine(label,normalFont,p,y,labelWidth+75,textHeight+2,mutedBrush);
+                float temperatureX=contentWidth-p;
+                if(contents[4].enabled)for(auto it=group.physical.rbegin();it!=group.physical.rend();++it){const auto core=*it;temperatureX-=temperatureColumnWidth;DrawTextLine(format(core<sensors.cores.size()?sensors.cores[core].temperature:-1,L"%.0f°"),normalFont,temperatureX,y,temperatureColumnWidth,textHeight+2,color(core<alerts.size()?alerts[core]:0));}
+                y+=textHeight+6;
+                for(auto physical:group.physical)for(auto i:topology.cores[physical].siblings)drawRow(i,group.kind);
+                y+=4;
+            }
+        }else{
+            for(std::size_t i=0;i<snapshot.size();++i)drawRow(i,topology.logical[i].kind);
+            if(contents[4].enabled){double hottest=-1;int alert=0;for(std::size_t i=0;i<sensors.cores.size();++i){hottest=(std::max)(hottest,sensors.cores[i].temperature);if(i<alerts.size())alert=(std::max)(alert,alerts[i]);}const float w=Measure(L"Temperature: ",normalFont).width;DrawTextLine(L"Temperature: ",normalFont,p,y,w,textHeight+2,mutedBrush);DrawTextLine(format(hottest,L"%.1f °C"),normalFont,p+w,y,width-w,textHeight+2,color(alert));y+=textHeight+4;}
         }
-        y+=8;
-        // A fixed, labelled display scale; it is not a measured bandwidth limit.
-        for(int direction=0;direction<2;++direction){const double value=direction?sensors.writeGBs:sensors.readGBs;DrawTextLine(direction?L"RAM W":L"RAM R",normalFont,p,y,labelWidth+10,textHeight+2,mutedBrush);
-            const float left=p+labelWidth+10,right=freqX-8;const float top=y+(textHeight-8)/2;
-            target->FillRectangle(D2D1::RectF(left,top,right,top+8),backgroundBrush);if(value>=0)target->FillRectangle(D2D1::RectF(left,top,left+(right-left)*static_cast<float>(std::clamp(value/100,0.0,1.0)),top+8),blueBrush);
-            DrawTextLine(format(value,L"%.1f GB/s"),normalFont,freqX,y,frequencyWidth+ipcWidth,textHeight+2,textBrush);y+=textHeight+4;}
-        DrawTextLine(Tr(L"RAM scale: 100 GB/s",L"带宽条刻度：100 GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;
-        DrawTextLine(L"LLC MPKI: N/A",normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;
-        DrawTextLine(preview?Tr(L"DEMO - simulated CPU data",L"演示模式 - 模拟 CPU 数据"):Tr(L"IPC / LLC: PMU unavailable",L"IPC / LLC：PMU 不可用"),normalFont,p,y,width,textHeight+2,mutedBrush);
+        // GB/s only: there is no guessed or fixed bandwidth ceiling.
+        if(contents[1].enabled){DrawTextLine(L"RAM R: "+format(sensors.readGBs,L"%.1f GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;DrawTextLine(L"RAM W: "+format(sensors.writeGBs,L"%.1f GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
+        if(contents[2].enabled){DrawTextLine(L"LLC MPKI: N/A",normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
+        if(preview)DrawTextLine(L"DEMO - simulated CPU data",normalFont,p,y,width,textHeight+2,mutedBrush);
         if(target->EndDraw()==D2DERR_RECREATE_TARGET)DropTarget();
     }
     EndPaint(windowHandle,&ps);
@@ -218,6 +268,13 @@ void Paint() {
 void Sample() {
     wchar_t path[32768]{};GetModuleFileNameW(nullptr,path,32768);std::wstring directory(path);directory=directory.substr(0,directory.find_last_of(L"\\")+1);
     HardwareSampler hardware(topology);if(!preview)hardware.Initialize(directory,selfTesting);
+    if(selfTesting && !preview && !benchmarkSeconds && hardware.Available()) {
+        HardwareReading off,on,resumed;
+        hardware.Poll(off,false);hardware.Poll(on,true);hardware.Poll(off,false);hardware.Poll(resumed,true);
+        const bool passed=off.readGBs<0 && off.writeGBs<0 && resumed.readGBs<0 && resumed.writeGBs<0 && (hardware.ImcError()!=ERROR_SUCCESS || resumed.ioctlCount>off.ioctlCount);
+        memoryLifecyclePassed.store(passed);
+        std::printf("RAM enable/disable/rebaseline checks=%s off_IOCTL=%llu on_IOCTL=%llu\n",passed?"PASS":"FAIL",off.ioctlCount,resumed.ioctlCount);
+    }
     PDH_HQUERY query=nullptr;const bool queryOpen=PdhOpenQueryW(nullptr,0,&query)==ERROR_SUCCESS;
     std::vector<PDH_HCOUNTER> total(processorCount),kernel(processorCount),utility(processorCount),privilegedUtility(processorCount);
     for(std::size_t i=0;queryOpen && i<processorCount;++i){const auto instance=Number(rows[i].group)+L","+Number(rows[i].cpu);
@@ -232,7 +289,7 @@ void Sample() {
     while(WaitForSingleObject(stopEvent,waitMs)==WAIT_TIMEOUT){
         const double start=MonotonicSeconds(),dt=start-previous;previous=start;
         const bool collected=queryOpen && PdhCollectQueryData(query)==ERROR_SUCCESS;const int selectedMode=usageMode.load();int available=0;
-        hardware.Poll(sensors);
+        hardware.Poll(sensors,memoryEnabled.load());
         for(std::size_t i=0;i<next.size();++i){auto& row=next[i];row.total=row.kernel=row.ghz=-1;
             auto readCounter=[&](PDH_HCOUNTER counter){PDH_FMT_COUNTERVALUE value{};if(collected && counter && PdhGetFormattedCounterValue(counter,PDH_FMT_DOUBLE|PDH_FMT_NOCAP100,nullptr,&value)==ERROR_SUCCESS && (value.CStatus==PDH_CSTATUS_VALID_DATA || value.CStatus==PDH_CSTATUS_NEW_DATA) && std::isfinite(value.doubleValue))return (std::max)(value.doubleValue,0.0);return -1.0;};
             row.time=readCounter(total[i]);row.utility=selectedMode?readCounter(utility[i]):-1;
@@ -263,11 +320,27 @@ HICON CreateTrayIcon() {
 }
 void Tray(DWORD operation) {
     if (selfTesting) return;
-    NOTIFYICONDATAW data{}; data.cbSize=sizeof(data);data.hWnd=windowHandle;data.uID=1;data.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;data.uCallbackMessage=TrayMessage;data.hIcon=trayIcon;wcscpy_s(data.szTip,L"CPU Freq Moniter 1.4.0");
+    NOTIFYICONDATAW data{}; data.cbSize=sizeof(data);data.hWnd=windowHandle;data.uID=1;data.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;data.uCallbackMessage=TrayMessage;data.hIcon=trayIcon;wcscpy_s(data.szTip,L"CPU Freq Moniter 1.5.0");
     Shell_NotifyIconW(operation,&data);
 }
 void ShowSettings();
 void UpdateSettingsLanguage(HWND hwnd) {
+    SetWindowTextW(GetDlgItem(hwnd,306),Tr(L"View mode",L"显示模式"));
+    SetWindowTextW(GetDlgItem(hwnd,308),Tr(L"Size preset",L"大小预设"));
+    for(int id:{307,309})SendDlgItemMessageW(hwnd,id,CB_RESETCONTENT,0,0);
+    SendDlgItemMessageW(hwnd,307,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(Tr(L"Detailed",L"详细模式")));
+    SendDlgItemMessageW(hwnd,307,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(Tr(L"Compact",L"精简模式")));
+    SendDlgItemMessageW(hwnd,307,CB_SETCURSEL,detailed?0:1,0);
+    for(const auto* label:{Tr(L"Small",L"小号"),Tr(L"Default",L"默认"),Tr(L"Custom",L"自定义")})SendDlgItemMessageW(hwnd,309,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label));
+    int selectedPreset=2;
+    if(options[1].value==280 && options[2].value==3 && options[3].value==16 && options[4].value==11 && options[5].value==10 && options[6].value==10 && options[7].value==10)selectedPreset=0;
+    if(options[1].value==340 && options[2].value==5 && options[3].value==19 && options[4].value==13 && options[5].value==12 && options[6].value==14 && options[7].value==12)selectedPreset=1;
+    SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selectedPreset,0);
+    for(int i=0;i<ContentCount;++i){SetWindowTextW(GetDlgItem(hwnd,400+i),Tr(contents[i].en,contents[i].zh));SendDlgItemMessageW(hwnd,400+i,BM_SETCHECK,contents[i].enabled?BST_CHECKED:BST_UNCHECKED,0);}
+    TCITEMW item{};item.mask=TCIF_TEXT;
+    item.pszText=const_cast<wchar_t*>(Tr(L"General",L"常规"));TabCtrl_SetItem(GetDlgItem(hwnd,500),0,&item);
+    item.pszText=const_cast<wchar_t*>(Tr(L"Display content",L"显示内容"));TabCtrl_SetItem(GetDlgItem(hwnd,500),1,&item);
+
     SetWindowTextW(hwnd,Tr(L"CPU Freq Moniter - Settings",L"CPU Freq Moniter - 设置"));
     for(int i=0;i<OptionCount;++i) SetWindowTextW(GetDlgItem(hwnd,200+i), language ? chineseLabels[i] : options[i].label);
     SetWindowTextW(GetDlgItem(hwnd,300),Tr(L"Changes preview and save automatically.\nWidth expands when needed to fit text.",L"更改即时预览并自动保存。\n宽度不足时会自动扩展以容纳文字。"));
@@ -281,38 +354,32 @@ void UpdateSettingsLanguage(HWND hwnd) {
 }
 void SettingsLayout(HWND hwnd) {
     const float s=static_cast<float>(GetDpiForWindow(hwnd))/96;
-    auto px=[s](int value){return static_cast<int>(std::ceil(static_cast<float>(value)*s));};
-    if(settingsFont) DeleteObject(settingsFont);
+    auto px=[s](int v){return static_cast<int>(std::ceil(static_cast<float>(v)*s));};
+    if(settingsFont)DeleteObject(settingsFont);
     settingsFont=CreateFontW(-px(14),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,DEFAULT_QUALITY,DEFAULT_PITCH,L"Segoe UI");
-    for(int i=0;i<OptionCount;++i) {
-        SetWindowPos(GetDlgItem(hwnd,200+i),nullptr,px(20),px(20+i*34),px(225),px(25),SWP_NOZORDER);
-        SetWindowPos(edits[i],nullptr,px(250),px(20+i*34),px(100),px(25),SWP_NOZORDER);
-        SendMessageW(GetDlgItem(hwnd,200+i),WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);SendMessageW(edits[i],WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);
-    }
-    SetWindowPos(GetDlgItem(hwnd,300),nullptr,px(20),px(20+OptionCount*34+80),px(340),px(46),SWP_NOZORDER);
-    SetWindowPos(GetDlgItem(hwnd,301),nullptr,px(240),px(20+OptionCount*34+137),px(110),px(30),SWP_NOZORDER);
-    SendMessageW(GetDlgItem(hwnd,300),WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);SendMessageW(GetDlgItem(hwnd,301),WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);
-    for(int row=0;row<2;++row) {
-        const int y=20+(OptionCount+row)*34;
-        SetWindowPos(GetDlgItem(hwnd,302+row*2),nullptr,px(20),px(y),px(190),px(25),SWP_NOZORDER);
-        SetWindowPos(GetDlgItem(hwnd,303+row*2),nullptr,px(210),px(y),px(145),px(150),SWP_NOZORDER);
-        SendDlgItemMessageW(hwnd,302+row*2,WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);
-        SendDlgItemMessageW(hwnd,303+row*2,WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);
-        SendDlgItemMessageW(hwnd,303+row*2,CB_SETDROPPEDWIDTH,px(230),0);
-    }
-    RECT r{0,0,px(375),px(20+OptionCount*34+185)};AdjustWindowRectExForDpi(&r,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,FALSE,WS_EX_TOOLWINDOW,GetDpiForWindow(hwnd));
+    const int top=52,step=30,bottom=top+(OptionCount+4)*step;
+    auto place=[&](int id,int x,int y,int w,int h,bool show){HWND child=GetDlgItem(hwnd,id);SetWindowPos(child,nullptr,px(x),px(y),px(w),px(h),SWP_NOZORDER);SendMessageW(child,WM_SETFONT,reinterpret_cast<WPARAM>(settingsFont),TRUE);ShowWindow(child,show?SW_SHOW:SW_HIDE);};
+    place(500,10,8,365,bottom, true);
+    for(int i=0;i<OptionCount;++i){place(200+i,24,top+i*step,225,25,settingsTab==0);place(100+i,254,top+i*step,100,25,settingsTab==0);}
+    for(int row=0;row<4;++row){place(302+row*2,24,top+(OptionCount+row)*step,180,25,settingsTab==0);place(303+row*2,210,top+(OptionCount+row)*step,144,150,settingsTab==0);SendDlgItemMessageW(hwnd,303+row*2,CB_SETDROPPEDWIDTH,px(240),0);}
+    for(int i=0;i<ContentCount;++i)place(400+i,24,top+i*step,320,25,settingsTab==1);
+    place(300,20,bottom+18,345,46,true);place(301,244,bottom+70,110,30,true);
+    RECT r{0,0,px(385),px(bottom+112)};AdjustWindowRectExForDpi(&r,WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,FALSE,WS_EX_TOOLWINDOW,GetDpiForWindow(hwnd));
     SetWindowPos(hwnd,nullptr,0,0,r.right-r.left,r.bottom-r.top,SWP_NOMOVE|SWP_NOZORDER);
 }
 LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
     switch(message) {
-    case WM_CREATE:
+    case WM_CREATE: {
+        HWND tab=CreateWindowW(WC_TABCONTROLW,L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_CLIPSIBLINGS,0,0,0,0,hwnd,reinterpret_cast<HMENU>(500),nullptr,nullptr);
+        TCITEMW item{};item.mask=TCIF_TEXT;item.pszText=const_cast<wchar_t*>(L"General");TabCtrl_InsertItem(tab,0,&item);item.pszText=const_cast<wchar_t*>(L"Display content");TabCtrl_InsertItem(tab,1,&item);TabCtrl_SetCurSel(tab,settingsTab);
+        for(int i=0;i<ContentCount;++i)CreateWindowW(L"BUTTON",L"",WS_CHILD|WS_TABSTOP|BS_AUTOCHECKBOX,0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(400+i)),nullptr,nullptr);
         for(int i=0;i<OptionCount;++i) {
             CreateWindowW(L"STATIC",options[i].label,WS_CHILD|WS_VISIBLE,0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(200+i)),nullptr,nullptr);
             edits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",Number(options[i].value).c_str(),WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_NUMBER|ES_AUTOHSCROLL,0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(100+i)),nullptr,nullptr);
         }
         CreateWindowW(L"STATIC",L"Changes preview and save automatically.\nWidth expands when needed to fit text.",WS_CHILD|WS_VISIBLE,0,0,0,0,hwnd,reinterpret_cast<HMENU>(300),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Close",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,0,0,0,0,hwnd,reinterpret_cast<HMENU>(301),nullptr,nullptr);
-        for(int row=0;row<2;++row) {
+        for(int row=0;row<4;++row) {
             CreateWindowW(L"STATIC",L"",WS_CHILD|WS_VISIBLE,0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(302+row*2)),nullptr,nullptr);
             CreateWindowW(L"COMBOBOX",L"",WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST|WS_VSCROLL,0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(303+row*2)),nullptr,nullptr);
         }
@@ -320,8 +387,13 @@ LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
         SendDlgItemMessageW(hwnd,303,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(L"简体中文"));
         SendDlgItemMessageW(hwnd,303,CB_SETCURSEL,language,0);
         UpdateSettingsLanguage(hwnd);SettingsLayout(hwnd); return 0;
+    }
+    case WM_NOTIFY: if(reinterpret_cast<NMHDR*>(l)->idFrom==500 && reinterpret_cast<NMHDR*>(l)->code==TCN_SELCHANGE){settingsTab=TabCtrl_GetCurSel(GetDlgItem(hwnd,500));SettingsLayout(hwnd);}return 0;
     case WM_COMMAND: {
         const int id=LOWORD(w);
+        if(id>=400 && id<400+ContentCount && HIWORD(w)==BN_CLICKED){contents[id-400].enabled=SendDlgItemMessageW(hwnd,id,BM_GETCHECK,0,0)==BST_CHECKED;Layout();if(!selfTesting)SaveSettings();return 0;}
+        if((id==307 || id==309) && HIWORD(w)==CBN_SELCHANGE){const int selected=static_cast<int>(SendDlgItemMessageW(hwnd,id,CB_GETCURSEL,0,0));if(selected>=0 && selected<2){if(id==307)detailed=selected==0;else {ApplyPreset(selected);for(int i=0;i<OptionCount;++i)SetWindowTextW(edits[i],Number(options[i].value).c_str());SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selected,0);}Layout();if(!selfTesting)SaveSettings();}return 0;}
+
         if((id==303 || id==305) && HIWORD(w)==CBN_SELCHANGE) {
             const int selected=static_cast<int>(SendDlgItemMessageW(hwnd,id,CB_GETCURSEL,0,0));
             if(selected>=0 && selected<=1) {
@@ -333,7 +405,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
         if(id==301 || id==IDCANCEL) { DestroyWindow(hwnd);return 0; }
         if(id>=100 && id<100+OptionCount && (HIWORD(w)==EN_CHANGE || HIWORD(w)==EN_KILLFOCUS) && settingsHandle) {
             const int i=id-100; BOOL valid=FALSE; const UINT value=GetDlgItemInt(hwnd,id,&valid,FALSE);
-            if(valid && value>=static_cast<UINT>(options[i].minimum) && value<=static_cast<UINT>(options[i].maximum)) {options[i].value=static_cast<int>(value);Layout();if(!selfTesting) SaveSettings();}
+            if(valid && value>=static_cast<UINT>(options[i].minimum) && value<=static_cast<UINT>(options[i].maximum)) {options[i].value=static_cast<int>(value);if(i>=1 && i<=7)SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,2,0);Layout();if(!selfTesting) SaveSettings();}
             else if(HIWORD(w)==EN_KILLFOCUS) SetWindowTextW(edits[i],Number(options[i].value).c_str());
         }
         return 0;
@@ -349,7 +421,7 @@ void ShowSettings() {
     ShowWindow(settingsHandle,SW_SHOW);SetForegroundWindow(settingsHandle);
 }
 HMENU CreateTrayMenu(HWND hwnd) {
-    HMENU menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING,1,IsWindowVisible(hwnd)?Tr(L"Hide overlay",L"隐藏浮窗"):Tr(L"Show overlay",L"显示浮窗"));AppendMenuW(menu,MF_STRING,2,Tr(L"Settings",L"打开设置"));AppendMenuW(menu,MF_STRING,3,Tr(L"About",L"关于"));AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,4,Tr(L"Exit",L"退出"));
+    HMENU menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING|(detailed?MF_CHECKED:0),5,Tr(L"Detailed mode",L"详细模式"));AppendMenuW(menu,MF_STRING|(!detailed?MF_CHECKED:0),6,Tr(L"Compact mode",L"精简模式"));AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,1,IsWindowVisible(hwnd)?Tr(L"Hide overlay",L"隐藏浮窗"):Tr(L"Show overlay",L"显示浮窗"));AppendMenuW(menu,MF_STRING,2,Tr(L"Settings",L"打开设置"));AppendMenuW(menu,MF_STRING,3,Tr(L"About",L"关于"));AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,4,Tr(L"Exit",L"退出"));
     return menu;
 }
 LRESULT CALLBACK WindowProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
@@ -374,8 +446,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
             POINT p{};GetCursorPos(&p);SetForegroundWindow(hwnd);const UINT command=static_cast<UINT>(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,hwnd,nullptr));DestroyMenu(menu);PostMessageW(hwnd,WM_NULL,0,0);
             if(command==1) ShowWindow(hwnd,IsWindowVisible(hwnd)?SW_HIDE:SW_SHOWNOACTIVATE);
             if(command==2) ShowSettings();
-            if(command==3) MessageBoxW(hwnd,Tr(L"CPU Freq Moniter 1.4.0\nIntel frequency via PawnIO\nTemperature: core and package sensors\nBlue = total; dark blue = kernel portion\nDrag anywhere; double-click to hide.\nMouse wheel scrolls tall overlays.",L"CPU Freq Moniter 1.4.0\n通过 PawnIO 读取 Intel 频率\n温度：核心与封装传感器\n蓝色表示总占用，深蓝色表示其中的内核占用\n任意位置拖动；双击隐藏。\n超高浮窗可用滚轮查看。"),Tr(L"About",L"关于"),MB_OK);
+            if(command==3) MessageBoxW(hwnd,Tr(L"CPU Freq Moniter 1.5.0\nIntel frequency via PawnIO\nTemperature: core and package sensors\nBlue = total; dark blue = kernel portion\nDrag anywhere; double-click to hide.\nMouse wheel scrolls tall overlays.",L"CPU Freq Moniter 1.5.0\n通过 PawnIO 读取 Intel 频率\n温度：核心与封装传感器\n蓝色表示总占用，深蓝色表示其中的内核占用\n任意位置拖动；双击隐藏。\n超高浮窗可用滚轮查看。"),Tr(L"About",L"关于"),MB_OK);
             if(command==4) DestroyWindow(hwnd);
+            if(command==5 || command==6){detailed=command==5;Layout();if(settingsHandle)UpdateSettingsLanguage(settingsHandle);if(!selfTesting)SaveSettings();}
         }return 0;
     case WM_CLOSE:ShowWindow(hwnd,SW_HIDE);return 0;
     case WM_DESTROY:if(!selfTesting)SaveSettings();Tray(NIM_DELETE);SetEvent(stopEvent);PostQuitMessage(0);return 0;
@@ -408,8 +481,9 @@ int RunMonitor(bool demo, bool selfTest, int benchmark) {
     }
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
+    INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_TAB_CLASSES};InitCommonControlsEx(&controls);
     if(FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,&factory)) || FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(&textFactory)))) return 1;
-    topology=DetectTopology();BuildDisplayGroups();for(const auto& cpu:topology.logical)rows.push_back({cpu.group,cpu.number});
+    topology=DetectTopology();cpuTitle=ShortCpuName(topology.name);BuildDisplayGroups();for(const auto& cpu:topology.logical)rows.push_back({cpu.group,cpu.number});
     if(rows.empty()){MessageBoxW(nullptr,L"Cannot obtain reliable CPU topology.",L"CPU Freq Moniter",MB_ICONERROR);return 1;}
     processorCount = rows.size();
     LoadSettings();stopEvent=CreateEventW(nullptr,TRUE,FALSE,nullptr);if(!stopEvent)return 1;
@@ -428,6 +502,7 @@ int RunMonitor(bool demo, bool selfTest, int benchmark) {
         if(benchmark && message.message==WM_TIMER && message.wParam==98){KillTimer(windowHandle,98);GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernelStart,&userStart);benchmarkStart=MonotonicSeconds();std::lock_guard<std::mutex> lock(dataMutex);sampleDurations.clear();paintLatencies.clear();sampleIoctls=0;bandwidthSamples=0;bandwidthReadSum=bandwidthWriteSum=bandwidthReadMax=bandwidthWriteMax=0;continue;}
         if(selfTest && message.message==WM_TIMER && message.wParam==99) {
             KillTimer(windowHandle,99);
+            if(!memoryLifecyclePassed.load())result=24;
             if(benchmark) {DestroyWindow(windowHandle);continue;}
             ShowSettings();
             SendDlgItemMessageW(settingsHandle,303,CB_SETCURSEL,1,0);
@@ -443,6 +518,31 @@ int RunMonitor(bool demo, bool selfTest, int benchmark) {
             GetWindowTextW(GetDlgItem(settingsHandle,301),translated,64);if(wcscmp(translated,L"Close")!=0)result=7;
             translatedMenu=CreateTrayMenu(windowHandle);GetMenuStringW(translatedMenu,2,translated,64,MF_BYCOMMAND);DestroyMenu(translatedMenu);
             if(wcscmp(translated,L"Settings")!=0)result=10;
+            const float detailedHeight=contentHeight;
+            SendDlgItemMessageW(settingsHandle,307,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(307,CBN_SELCHANGE),0);
+            if(detailed || contentHeight>=detailedHeight)result=13;
+            SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,0,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
+            if(options[1].value!=280 || options[4].value!=11)result=14;
+            SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
+            if(options[1].value!=340 || options[4].value!=13)result=15;
+            SetWindowTextW(edits[8],L"10");if(interval.load()!=100)result=16;
+            SetWindowTextW(edits[8],L"4");
+            TabCtrl_SetCurSel(GetDlgItem(settingsHandle,500),1);NMHDR changed{};changed.idFrom=500;changed.code=TCN_SELCHANGE;
+            SendMessageW(settingsHandle,WM_NOTIFY,500,reinterpret_cast<LPARAM>(&changed));
+            if(IsWindowVisible(edits[0]) || !IsWindowVisible(GetDlgItem(settingsHandle,400)))result=17;
+            SendDlgItemMessageW(settingsHandle,400,BM_SETCHECK,BST_CHECKED,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(400,BN_CLICKED),0);
+            if(!contents[0].enabled || ipcWidth<=0)result=18;
+            const auto titleEN=cpuTitle;const float widthEN=contentWidth;
+            language=1;UpdateSettingsLanguage(settingsHandle);Layout();if(cpuTitle!=titleEN || contentWidth!=widthEN)result=19;
+            SaveSettings();detailed=true;contents[0].enabled=false;ReadPreferences();if(detailed || !contents[0].enabled || !contents[1].enabled)result=20;
+            SendDlgItemMessageW(settingsHandle,401,BM_SETCHECK,BST_UNCHECKED,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(401,BN_CLICKED),0);
+            if(memoryEnabled.load())result=22;
+            SendDlgItemMessageW(settingsHandle,401,BM_SETCHECK,BST_CHECKED,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(401,BN_CLICKED),0);
+            if(!memoryEnabled.load())result=23;
+            detailed=true;contents[0].enabled=false;Layout();
+            if(CoreRowHeight(CoreKind::Performance)!=(std::max)(textHeight,static_cast<float>(options[5].value)))result=21;
+            TabCtrl_SetCurSel(GetDlgItem(settingsHandle,500),0);SendMessageW(settingsHandle,WM_NOTIFY,500,reinterpret_cast<LPARAM>(&changed));
+            std::printf("New UI checks: mode/presets/refresh/tabs/content/persistence/EN/P-core spacing exit=%d\n",result);
             SetWindowTextW(edits[4],L"36");SetWindowTextW(edits[1],L"220");
             if(contentWidth-labelWidth-frequencyWidth-ipcWidth-busyWidth-2*options[6].value<32)result=2;
             std::size_t displayed=0;for(const auto& group:displayGroups){if(group.kind==CoreKind::Efficiency && group.physical.size()>6)result=11;for(auto core:group.physical)displayed+=topology.cores[core].siblings.size();}if(displayed!=processorCount)result=12;

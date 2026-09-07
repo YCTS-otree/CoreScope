@@ -4,6 +4,10 @@
 #include <cstdio>
 #include <vector>
 int main() {
+    assert(ShortCpuName(L"12th Gen Intel(R) Core(TM) i7-12700KF") == L"Intel i7-12700KF");
+    assert(ShortCpuName(L"Intel(R) Core(TM) i9-14900KS @ 3.20GHz") == L"Intel i9-14900KS");
+    assert(ShortCpuName(L"AMD Ryzen 9 7950X 16-Core Processor") == L"AMD Ryzen 9 7950X");
+    assert(ShortCpuName(L"Intel(R) Core(TM) Ultra 9 285K") == L"Intel Core Ultra 9 285K");
     CounterDelta counter;std::uint64_t delta=0;
     assert(!counter.Update(0xfffffff0,32,.25,delta));
     assert(counter.Update(0x20,32,.25,delta) && delta==48);

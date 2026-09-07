@@ -15,6 +15,7 @@ struct CpuTopology {
     std::vector<LogicalCpu> logical; std::vector<PhysicalCpu> cores;
 };
 CpuTopology DetectTopology();
+std::wstring ShortCpuName(std::wstring name);
 const wchar_t* CoreKindName(CoreKind kind);
 struct CoreReading { double temperature=-1; int tjMax=0; bool throttled=false; };
 struct HardwareReading {
@@ -39,11 +40,14 @@ class HardwareSampler {
 public:
     explicit HardwareSampler(const CpuTopology& topology);
     void Initialize(const std::wstring& directory, bool diagnostics=false);
-    void Poll(HardwareReading& reading);
+    void Poll(HardwareReading& reading, bool memoryEnabled=true);
     bool Available() const { return msrReady_; }
     DWORD PmuError() const { return pmuError_; }
     DWORD ImcError() const { return imcError_; }
 private:
+    void InitializeImc();
+    std::wstring directory_;
+    bool diagnostics_=false, imcAttempted_=false;
     const CpuTopology& topology_;
     PawnIoClient msr_, imc_;
     bool msrReady_=false, imcReady_=false, supported_=false;

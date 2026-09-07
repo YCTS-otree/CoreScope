@@ -1,4 +1,4 @@
-# CPU Frequency Monitor 1.4.0
+# CPU Frequency Monitor 1.5.0
 
 轻量常驻 CPU / 内存性能浮窗，默认显示真正的 **Busy Time（% Processor Time）**。
 目前已验证的硬件传感器平台为 Intel Alder Lake（Family 6，Model 97h / 9Ah）；
@@ -6,15 +6,17 @@
 
 ## 运行
 
-退出旧版托盘实例，再运行 `Release/v1.4.0/Cpu_freq_Moniter_v1.4.0.exe`。
-需要管理员权限和已安装的 PawnIO 2.x 官方签名驱动。发布目录中的
-`IntelMSR.bin`、`IntelMCHBAR.bin` 必须与 exe 放在一起。
+退出旧版托盘实例，再运行 `Release/v1.5.0/Cpu_freq_Moniter_v1.5.0.exe`。
+需要管理员权限。发行包附带官方签名 PawnIO 2.2.0 安装器，
+首次使用请在管理员 PowerShell 运行 `Dependencies/PawnIO/Install-PawnIO.ps1`。
+需要使用随附包替换已有驱动时添加 `-Reinstall`；本机已完成替换安装。
+PawnIO 是系统共享驱动，并非每个项目私有的驱动实例。`IntelMSR.bin`、`IntelMCHBAR.bin` 必须与 exe 放在一起。
 
 - 单实例 IPC：再次启动显示已有浮窗，新进程退出。
-- 全窗拖动、双击隐藏；托盘单击设置，右键显示/隐藏、设置、关于、退出。
-- English / 简体中文；设置即时预览并保存在 `%LOCALAPPDATA%/CpuFreqMonitor/settings.ini`。
+- 全窗拖动、双击隐藏；托盘单击设置，右键详细/精简模式、显示/隐藏、设置、关于、退出。
+- 设置和托盘菜单支持 English / 简体中文；浮窗文本始终为 English。设置即时预览并保存在 `%LOCALAPPDATA%/CpuFreqMonitor/settings.ini`。
 - 浮窗自动适应逻辑核数、字体和 DPI，过高时滚轮查看；长 CPU 名称可以换行。
-- 升级至本版默认恢复 Busy Time 和 250 ms 采样，保留旧的外观及语言配置。
+- 升级至本版默认 4 Hz 刷新，继续使用 Busy Time，保留旧的外观及语言配置。
   Utility 仍可手动选择，其内核段使用配套的 Privileged Utility。
 
 ## 指标与能力边界
@@ -30,12 +32,14 @@
 | 核心温度 | 每物理核心读取 IA32_THERM_STATUS，启动时缓存 TjMax；SMT 不重复读取 |
 | Package 温度 | IA32_PACKAGE_THERM_STATUS，独立于最高核心温度 |
 | Package Power | RAPL Package Energy 差值 / QPC 实际时间，处理 32-bit 回绕 |
-| DRAM Read / Write | 官方 IntelMCHBAR 模块只读 IMC free-running counters，64 bytes/transaction，十进制 GB/s |
+| DRAM Read / Write | 官方 IntelMCHBAR 模块读取 IMC free-running counters，显示实际 GB/s；不设置带宽上限 |
 | IPC | **N/A：当前签名 IntelMSR 模块拒绝 fixed PMU counter 读取** |
 | LLC Miss / Reference / MPKI | **N/A：当前模块未开放 PMU 事件配置与计数读取** |
 
 P 核按物理核心分组显示 SMT 线程；E 核最多 6 个物理核心一组，并列显示各核心温度。
-蓝色是总占用，深蓝色覆盖其中的内核占用，不相加。每条线程显示百分比、频率和 IPC 栏。
+蓝色是总占用，深蓝色覆盖其中的内核占用，不相加。详细模式显示百分比和频率；IPC 栏可选。P 核子条贴合，间隔为 0 DIP，条高至少容纳文字。
+精简模式恢复旧版 CoreN + 进度条 + GHz 列与底部最高核心温度，不显示物理分组。
+标题只保留厂商和型号，例如 `Intel i7-12700KF`。
 
 没有使用 APERF 冒充 retired instructions，也没有使用 Pages/sec、缓存缺页或累计计数
 冒充 LLC MPKI / DRAM 带宽。IPC 和 LLC 并未实现为可用数据，不能据此做性能诊断。
@@ -43,13 +47,10 @@ P 核按物理核心分组显示 SMT 线程；E 核最多 6 个物理核心一�
 
 ## DRAM 带宽
 
-采用 Intel PCM 对 Alder Lake 选择的 TGLClientBW 读取方式。启动时识别可用 MMIO bank，
-跳过读写均为全 1 的未实现区域；正常运行仅读取已确认的 bank，不写 IMC 配置。
-每个方向汇总事务增量乘 64，并除以实际采样秒数与 1e9。
-
-使用低 32 位模差；间隔超过 2 秒时该轮带宽显示 N/A 并重新建立基线，以免多次回绕
-产生错误速率。RAPL 在长暂停后也会重新建立基线。错误或不合理的读数不进入显示。
-RAM 条的标尺固定为 **100 GB/s**，旁边明确注明；不是测得的系统最大带宽，也不据此判定饱和。
+按用户澄清，保留实际 RAM R/W 读数，删除不准确的固定 100 GB/s 上限与比例条。
+默认显示读写 GB/s 数值，不推断内存带宽饱和程度。
+关闭显示时不初始化或读取 IMC；重新启用时先建立计数基线。
+初始化最多执行一次，缓存有效 bank；按实际间隔计算低 32 位计数差，长暂停重新建基线。
 
 ## 异常颜色
 
@@ -69,10 +70,15 @@ RAM 条的标尺固定为 **100 GB/s**，旁边明确注明；不是测得的系
 | 标题 / 条目字号 | 19 / 13 DIP | 10–48 / 8–36 DIP |
 | 条高 | 12 DIP | 2–48 DIP |
 | 内边距 / 圆角 | 14 / 12 DIP | 4–48 / 0–40 DIP |
-| 采样间隔 | 250 ms（约 4 Hz） | 100–5000 ms |
+| 刷新率 | 4 Hz | 1–10 Hz |
 | 置顶 | 1 | 0 / 1 |
 
-100% 缩放时 1 DIP 对应 1 像素。设置过慢的采样间隔会使 IMC 速率不可用，见上文。
+100% 缩放时 1 DIP 对应 1 像素。采样与浮窗刷新共用所选频率，实际频率受采样耗时影响。
+
+设置包含「常规」「显示内容」选项卡。常规可选详细/精简模式、小号/默认预设；
+手动调整参数仍有效。预设仅调整尺寸和字体，不覆盖语言、刷新率、透明度或内容选择。
+显示内容可分别开关 IPC、RAM R/W、LLC MPKI、频率、温度、封装功耗（详细模式）。
+IPC、LLC MPKI 默认隐藏，RAM R/W 默认显示，不可用数据不会生成估算值。
 
 ## 构建和测试
 
@@ -92,11 +98,12 @@ msbuild tests/hardware_tests.vcxproj /p:Configuration=Release /p:Platform=x64
 - `--inspect`：独立无托盘的 63 秒可见检查窗口，自动退出。
 
 自检/测量输出写到 exe 旁的测试文件，使用独立窗口类与配置，不修改用户设置、不创建托盘。
-开发产物位于 `build/`，发布只包含 exe、签名模块及文档/许可证；测试结果见 `TEST_RESULTS.md`。
+开发产物位于 `build/`，发布包含 exe、签名模块、官方 PawnIO 安装器及文档/许可证；测试结果见 `TEST_RESULTS.md`。
 当前图形捕获接口不可用，不能将程序化布局检查等同于完成截图验收。
 
 ## 第三方组件
 
 PawnIO.Modules 0.2.11，LGPL-2.1-or-later，来源和哈希见
 `third_party/PawnIO.Modules/README.md`；发布目录附带许可证与来源说明。
-本程序不安装其他驱动、不修改 PMU/IMC 配置、不需要 Windows 测试模式。
+官方 PawnIO 安装器来源、SHA256 和重装方法见 `Dependencies/PawnIO/README.md`（源码中位于 `third_party/PawnIO.Setup/`）。
+不修改 PMU/IMC 配置，不启用 unrestricted 模式，不需要 Windows 测试模式。

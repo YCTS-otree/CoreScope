@@ -87,11 +87,15 @@ void HardwareSampler::Initialize(const std::wstring& directory, bool diagnostics
     // Capability probe only; never reprogram counters owned by Windows/profilers.
     // 0.2.11 rejects IA32_FIXED_CTR0; IPC and LLC/MPKI must stay unavailable.
     std::uint64_t probe=0;msr_.ReadMsr(IntelRegisters::FixedCtr0,probe,pmuError_);
-    imcReady_=topology_.packages==1 && imc_.OpenAndLoad((directory+L"IntelMCHBAR.bin").c_str(),imcError_);
+    directory_=directory;diagnostics_=diagnostics;
+}
+void HardwareSampler::InitializeImc() {
+    imcAttempted_=true;
+    imcReady_=topology_.packages==1 && imc_.OpenAndLoad((directory_+L"IntelMCHBAR.bin").c_str(),imcError_);
     bool anyBank=false;
     for(std::size_t bank=0;imcReady_ && bank<4;++bank){std::uint64_t read=0,write=0;
         if(!imc_.ReadMmioQword(IntelRegisters::Imc[bank*2],read,imcError_) || !imc_.ReadMmioQword(IntelRegisters::Imc[bank*2+1],write,imcError_)){imcReady_=false;break;}
-        if(diagnostics)std::printf("IMC bank%zu read=%llX write=%llX\n",bank,read,write);
+        if(diagnostics_)std::printf("IMC bank%zu read=%llX write=%llX\n",bank,read,write);
         // Unimplemented MMIO banks return all ones. Do not count or repeatedly poll them.
         if(read==~0ull && write==~0ull)continue;
         if(read==~0ull || write==~0ull){imcReady_=false;imcError_=ERROR_INVALID_DATA;break;}
@@ -99,7 +103,8 @@ void HardwareSampler::Initialize(const std::wstring& directory, bool diagnostics
     }
     imcReady_=imcReady_ && anyBank;if(!imcReady_ && imcError_==0)imcError_=ERROR_NOT_SUPPORTED;
 }
-void HardwareSampler::Poll(HardwareReading& reading) {
+
+void HardwareSampler::Poll(HardwareReading& reading, bool memoryEnabled) {
     reading.frequency.assign(topology_.logical.size(),-1);reading.cores.assign(topology_.cores.size(),{});
     reading.packageThrottled=false;
     reading.packageTemperature=reading.packageWatts=reading.readGBs=reading.writeGBs=-1;
@@ -116,10 +121,26 @@ void HardwareSampler::Poll(HardwareReading& reading) {
         package.lastTime=now;
     }
     if(allPower)reading.packageWatts=watts;
-    if(imcReady_){const double now=MonotonicSeconds(),dt=now-lastImcTime_;double reads=0,writes=0;bool valid=true;
+    if(memoryEnabled && !imcAttempted_)InitializeImc();
+    if(!memoryEnabled){lastImcTime_=0;for(auto& counter:imcCounters_)counter.Reset();}
+    if(memoryEnabled && imcReady_){const double now=MonotonicSeconds(),dt=now-lastImcTime_;double reads=0,writes=0;bool valid=true;
         for(std::size_t i=0;i<IntelRegisters::Imc.size();++i){if(!imcActive_[i])continue;std::uint64_t value=0,delta=0;if(!imc_.ReadMmioQword(IntelRegisters::Imc[i],value,imcError_) || value==~0ull){valid=false;imcReady_=false;if(imcError_==0)imcError_=ERROR_INVALID_DATA;break;}
             if(!imcCounters_[i].Update(value,32,dt,delta)){valid=false;continue;}if(i%2)writes+=static_cast<double>(delta)*64;else reads+=static_cast<double>(delta)*64;}
         if(valid && dt<=2 && reads/dt<256e9 && writes/dt<256e9){reading.readGBs=reads/dt/1e9;reading.writeGBs=writes/dt/1e9;}lastImcTime_=now;
     }
     reading.ioctlCount=msr_.ReadCount()+imc_.ReadCount()-before;
+}
+
+std::wstring ShortCpuName(std::wstring name) {
+    for(const auto* token:{L"(R)",L"(TM)"}){std::size_t at;while((at=name.find(token))!=std::wstring::npos)name.erase(at,wcslen(token));}
+    const auto intel=name.find(L"Intel");
+    if(intel!=std::wstring::npos){
+        for(const auto* family:{L"i3-",L"i5-",L"i7-",L"i9-"}){const auto start=name.find(family);if(start!=std::wstring::npos){const auto end=name.find(L' ',start);return L"Intel "+name.substr(start,end==std::wstring::npos?end:end-start);}}
+        name.erase(0,intel);
+    }
+    const auto at=name.find(L" @");if(at!=std::wstring::npos)name.erase(at);
+    for(const auto* suffix:{L" CPU",L" Processor",L" with Radeon"}){const auto pos=name.find(suffix);if(pos!=std::wstring::npos)name.erase(pos);}
+    const auto cores=name.find(L"-Core");if(cores!=std::wstring::npos){auto pos=name.rfind(L' ',cores);if(pos!=std::wstring::npos)name.erase(pos);}
+    while(!name.empty() && name.back()==L' ')name.pop_back();
+    return name.empty()?L"CPU":name;
 }
