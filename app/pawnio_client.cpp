@@ -101,7 +101,9 @@ bool PawnIoClient::Execute(const char* functionName, const std::uint64_t* input,
         return false;
     }
 
-    std::vector<std::uint8_t> request(FUNCTION_NAME_LENGTH + inputCount * sizeof(std::uint64_t));
+    std::array<std::uint8_t, FUNCTION_NAME_LENGTH + 8 * sizeof(std::uint64_t)> request{};
+    if(inputCount>8) {error=ERROR_INVALID_PARAMETER;return false;}
+    ++readCount_;
     strcpy_s(reinterpret_cast<char*>(request.data()), FUNCTION_NAME_LENGTH, functionName);
     if (inputCount != 0) {
         memcpy(request.data() + FUNCTION_NAME_LENGTH, input, inputCount * sizeof(std::uint64_t));
@@ -109,7 +111,7 @@ bool PawnIoClient::Execute(const char* functionName, const std::uint64_t* input,
 
     DWORD bytesReturned = 0;
     if (!DeviceIoControl(handle_, IOCTL_PAWNIO_EXECUTE_FUNCTION, request.data(),
-        static_cast<DWORD>(request.size()), output, static_cast<DWORD>(outputCount * sizeof(std::uint64_t)),
+        static_cast<DWORD>(FUNCTION_NAME_LENGTH + inputCount * sizeof(std::uint64_t)), output, static_cast<DWORD>(outputCount * sizeof(std::uint64_t)),
         &bytesReturned, nullptr)) {
         error = GetLastError();
         return false;
@@ -129,3 +131,5 @@ bool PawnIoClient::ReadMsr(std::uint32_t index, std::uint64_t& value, DWORD& err
     value = 0;
     return Execute("ioctl_read_msr", &input, 1, &value, 1, error);
 }
+
+bool PawnIoClient::ReadMmioQword(std::uint32_t offset, std::uint64_t& value, DWORD& error) const { const std::uint64_t input=offset;value=0;return Execute("ioctl_read_qword",&input,1,&value,1,error); }

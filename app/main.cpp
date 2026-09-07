@@ -1,4 +1,4 @@
-﻿#define WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <intrin.h>
@@ -112,13 +112,15 @@ std::vector<ProcessorLocation> EnumerateProcessors()
 
 int wmain(int argc, wchar_t* argv[])
 {
+    if (argc == 2 && wcscmp(argv[1], L"--inspect") == 0) return RunMonitor(false, true, 60);
+    if (argc == 2 && wcscmp(argv[1], L"--benchmark") == 0) return RunMonitor(false, true, 20);
     if (argc == 2 && wcscmp(argv[1], L"--sensor-test") == 0) return RunMonitor(false, true);
     if (argc == 1 || (argc == 2 && wcscmp(argv[1], L"--demo") == 0) || (argc == 2 && wcscmp(argv[1], L"--ui-test") == 0)) {
         return RunMonitor(argc == 2, argc == 2 && wcscmp(argv[1], L"--ui-test") == 0);
     }
     const bool runOnce = argc == 2 && wcscmp(argv[1], L"--once") == 0;
     if (argc > 1 && !runOnce) {
-        std::printf("Usage: Cpu_freq_Moniter_v1.3.0.exe [--once | --demo | --ui-test | --sensor-test]\n");
+        std::printf("Usage: Cpu_freq_Moniter_v1.4.0.exe [--once | --demo | --ui-test | --sensor-test | --benchmark | --inspect]\n");
         return 2;
     }
 

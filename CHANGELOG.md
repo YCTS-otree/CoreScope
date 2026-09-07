@@ -67,3 +67,23 @@
 ### Notes
 - 版本升级保留已有 UI 参数；未设置语言时按系统 UI 语言选择中文或英文。
 - 中英文菜单与设置切换、语言配置读写和 Core3 固定负载采样验证通过。
+
+## v1.4.0 - 2026-09-07
+
+### Added
+- 添加基于 Windows 拓扑与逐逻辑核 CPUID 的物理核心、P/E 类型、SMT sibling、x2APIC 和 PMU 静态能力识别。
+- 添加 P 核物理分组与最多 6 个 E 核一组的布局，显示占用百分比、核心温度和 IPC 不可用状态。
+- 添加 Alder Lake Package 温度、RAPL 差分功率和基于官方签名 IntelMCHBAR 模块的真实 DRAM 读写带宽。
+- 添加仅作用于 Busy / 温度指标本身的橙红色异常提示、EMA、持续时间、滞回和暂停恢复处理。
+- 添加硬件差分/拓扑回归测试与有限时长 CPU、内存、采样和刷新延迟测量入口。
+
+### Changed
+- 默认恢复 Busy Time / Processor Time，Utility 只保留为手动选项；新版本默认约 4 Hz。
+- 缓存拓扑、TjMax、RAPL 单位和可用 IMC bank；温度按物理核心采样，避免 SMT 重复读取。
+- PawnIO 请求使用栈缓冲，画刷和数据容器复用，窗口刷新通知合并，等待时间扣除采样耗时。
+- CPU 名称换行、窗口宽度按屏幕约束计算，过高分组继续使用滚轮查看。
+
+### Notes
+- IPC、LLC Miss/Reference/MPKI 仍不可用：官方 IntelMSR 0.2.11 未开放所需 PMU 计数器和控制寄存器，实机能力探测返回 ERROR_ACCESS_DENIED；未生成替代估算值。
+- 传感器 profile 当前只对 Alder Lake 97h/9Ah 启用，其他架构保留拓扑与 PDH，后续需逐平台验证。
+- 有限时长负载测量约占整机 CPU 0.051%、工作集 44.1 MiB；完整测量口径及截图接口限制见 TEST_RESULTS.md。
