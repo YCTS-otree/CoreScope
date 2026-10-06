@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder Version="1.0" Author="CpuFreq diagnostic">
+  <Profiles>
+    <SystemCollector Id="Collector" Name="CpuFreqPmuDiagnostic">
+      <BufferSize Value="128"/><Buffers Value="128"/>
+    </SystemCollector>
+    <SystemProvider Id="Provider">
+      <Keywords><Keyword Value="ProcessThread"/><Keyword Value="CSwitch"/></Keywords>
+    </SystemProvider>
+    <HardwareCounter Id="Counters" Strict="true">
+      <Counters>
+        <Counter Value="InstructionsRetiredFixed"/>
+        <Counter Value="UnhaltedCoreCyclesFixed"/>
+        <Counter Value="LLCMisses"/>
+      </Counters>
+      <Events><Event Value="CSwitch"/></Events>
+    </HardwareCounter>
+    <Profile Id="Pmu.Verbose.File" Name="Pmu" Description="Short PMU diagnostic" LoggingMode="File" DetailLevel="Verbose">
+      <Collectors><SystemCollectorId Value="Collector"><SystemProviderId Value="Provider"/><HardwareCounterId Value="Counters"/></SystemCollectorId></Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

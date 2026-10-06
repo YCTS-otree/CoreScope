@@ -1,6 +1,6 @@
-﻿#pragma once
+#pragma once
 
 #define CPU_FREQ_VERSION_MAJOR 1
-#define CPU_FREQ_VERSION_MINOR 5
+#define CPU_FREQ_VERSION_MINOR 7
 #define CPU_FREQ_VERSION_PATCH 0
-#define CPU_FREQ_VERSION_STRING "1.5.0"
+#define CPU_FREQ_VERSION_STRING "1.7.0"

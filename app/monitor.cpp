@@ -20,13 +20,14 @@
 #include "pawnio_client.h"
 #include "monitor.h"
 #include "hardware.h"
+#include "pmu.h"
 #include <psapi.h>
 #include "../shared/version.h"
 
 namespace {
 constexpr UINT TrayMessage = WM_APP + 1;
 constexpr UINT SampleMessage = WM_APP + 2;
-struct Row { WORD group; BYTE cpu; double total = -1, kernel = -1, ghz = -1, time = -1, utility = -1; int busyAlert=0; };
+struct Row { WORD group; BYTE cpu; double total = -1, kernel = -1, ghz = -1, time = -1, utility = -1, ipc = -1; int busyAlert=0; };
 struct Option { const wchar_t* key; const wchar_t* label; int value, minimum, maximum; };
 Option options[] = {
     {L"Opacity", L"Opacity (%)", 92, 15, 100},
@@ -41,7 +42,9 @@ Option options[] = {
     {L"Topmost", L"Always on top (0 / 1)", 1, 0, 1}
 };
 constexpr int OptionCount = static_cast<int>(sizeof(options) / sizeof(options[0]));
-HWND windowHandle = nullptr, settingsHandle = nullptr;
+HWND windowHandle = nullptr, settingsHandle = nullptr, tmaHandle=nullptr;
+void SyncTmaWindow();
+void ShowSettings();
 HWND edits[OptionCount]{};
 ID2D1Factory* factory = nullptr;
 IDWriteFactory* textFactory = nullptr;
@@ -66,7 +69,7 @@ std::vector<double> paintLatencies;
 double publishedAt=0;
 std::uint64_t sampleIoctls=0;
 double bandwidthReadSum=0,bandwidthWriteSum=0,bandwidthReadMax=0,bandwidthWriteMax=0;unsigned bandwidthSamples=0;
-int benchmarkSeconds=0;
+int benchmarkSeconds=0;unsigned pmuGoodSamples=0;
 std::atomic<bool> memoryLifecyclePassed{true};
 std::atomic<bool> samplePending{false};
 float ipcWidth=0, busyWidth=0, temperatureColumnWidth=0;
@@ -87,27 +90,32 @@ int savedX = CW_USEDEFAULT, savedY = CW_USEDEFAULT;
 bool preview = false;
 bool selfTesting = false;
 int language = 0;
-bool detailed=true;
+bool detailed=true,advanced=false;
+TmaReading tmaReading;DWORD tmaError=ERROR_NOT_SUPPORTED;double tmaPublishedAt=0;
+int tmaX=CW_USEDEFAULT,tmaY=CW_USEDEFAULT,tmaScroll=0,tmaFullHeight=0;unsigned tmaGoodSamples=0;
 std::wstring cpuTitle;
 struct ContentOption { const wchar_t* key; const wchar_t* en; const wchar_t* zh; bool enabled; };
 ContentOption contents[] = {
     {L"ShowIPC",L"IPC",L"IPC",false},
     {L"ShowRAM",L"RAM R/W",L"RAM R/W",true},
-    {L"ShowLLC",L"LLC MPKI",L"LLC MPKI",false},
+    {L"ShowLLC",L"LLC MPKI (P cores)",L"LLC MPKI（P 核）",false},
     {L"ShowFrequency",L"Frequency",L"频率",true},
     {L"ShowTemperature",L"Temperature",L"温度",true},
     {L"ShowPower",L"Package power (detailed)",L"封装功耗（详细模式）",true}
 };
 constexpr int ContentCount=static_cast<int>(sizeof(contents)/sizeof(contents[0]));
 std::atomic<bool> memoryEnabled{true};
+std::atomic<unsigned> pmuOptions{0};
 int settingsTab=0;
 float CoreRowHeight(CoreKind kind) {
     return (std::max)(textHeight,static_cast<float>(options[5].value)) + (detailed && kind==CoreKind::Performance?0.0f:static_cast<float>(options[2].value));
 }
 void ApplyPreset(int preset) {
+    const int tiny[]={92,250,1,16,9,6,10,10,1,1};
     const int smallPreset[]={92,280,3,16,11,10,10,10};
     const int normal[]={92,340,5,19,13,12,14,12};
-    for(int i=1;i<8;++i)options[i].value=preset==0?smallPreset[i]:normal[i];
+    if(preset==2){for(int i=0;i<OptionCount;++i)options[i].value=tiny[i];}
+    else for(int i=1;i<8;++i)options[i].value=preset==0?smallPreset[i]:normal[i];
 }
 
 std::atomic<int> usageMode{0};
@@ -124,6 +132,8 @@ void SaveSettings() {
     WritePrivateProfileStringW(L"UI", L"Language", language ? L"zh-CN" : L"en", iniPath.c_str());
     WritePrivateProfileStringW(L"UI", L"BusyModeV2", Number(usageMode.load()).c_str(), iniPath.c_str());
     WritePrivateProfileStringW(L"UI",L"Detailed",detailed?L"1":L"0",iniPath.c_str());
+    WritePrivateProfileStringW(L"UI",L"ViewMode",advanced?L"2":detailed?L"0":L"1",iniPath.c_str());
+    WritePrivateProfileStringW(L"UI",L"TmaX",Number(tmaX).c_str(),iniPath.c_str());WritePrivateProfileStringW(L"UI",L"TmaY",Number(tmaY).c_str(),iniPath.c_str());
     for(const auto& c:contents)WritePrivateProfileStringW(L"UI",c.key,c.enabled?L"1":L"0",iniPath.c_str());
     RECT rect{}; GetWindowRect(windowHandle, &rect);
     WritePrivateProfileStringW(L"UI", L"X", Number(rect.left).c_str(), iniPath.c_str());
@@ -132,6 +142,8 @@ void SaveSettings() {
 void ReadPreferences() {
     for (auto& o : options) o.value = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"UI", o.key, o.value, iniPath.c_str())), o.minimum, o.maximum);
     detailed=GetPrivateProfileIntW(L"UI",L"Detailed",1,iniPath.c_str())!=0;
+    const auto mode=GetPrivateProfileIntW(L"UI",L"ViewMode",detailed?0:1,iniPath.c_str());advanced=mode==2;detailed=mode!=1;
+    tmaX=static_cast<int>(GetPrivateProfileIntW(L"UI",L"TmaX",CW_USEDEFAULT,iniPath.c_str()));tmaY=static_cast<int>(GetPrivateProfileIntW(L"UI",L"TmaY",CW_USEDEFAULT,iniPath.c_str()));
     for(auto& c:contents)c.enabled=GetPrivateProfileIntW(L"UI",c.key,c.enabled?1:0,iniPath.c_str())!=0;
     wchar_t selectedLanguage[16]{};
     GetPrivateProfileStringW(L"UI", L"Language", PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_CHINESE ? L"zh-CN" : L"en", selectedLanguage, 16, iniPath.c_str());
@@ -162,11 +174,13 @@ void Layout() {
     normalFont->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP); titleFont->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
     titleHeight = Measure(cpuTitle, titleFont).height;
     textHeight = Measure(L"Temperature: 100.0 \u00b0C", normalFont).height;
-    labelWidth = Measure(L"Core" + Number(static_cast<int>(processorCount) - 1), normalFont).width + 10;
+    labelWidth = Measure(detailed?L"Core" + Number(static_cast<int>(processorCount) - 1):L"P "+Number(static_cast<int>(topology.cores.size())-1), normalFont).width + 10;
     frequencyWidth = contents[3].enabled?Measure(detailed?L"00.00G":L"0.0 GHz", normalFont).width + 12:0;
-    temperatureColumnWidth=Measure(L"100°",normalFont).width+8;ipcWidth=contents[0].enabled?Measure(L"N/A",normalFont).width+12:0;busyWidth=detailed?Measure(L"100%",normalFont).width+12:0;
+    temperatureColumnWidth=Measure(L"100°C",normalFont).width+8;ipcWidth=contents[0].enabled?Measure(L"99.99",normalFont).width+12:0;busyWidth=detailed?Measure(L"100%",normalFont).width+12:0;
     const float padding = static_cast<float>(options[6].value);
     contentWidth = (std::max)({static_cast<float>(options[1].value), labelWidth + frequencyWidth + ipcWidth + busyWidth + 70 + 2 * padding, Measure(cpuTitle, titleFont).width + 2 * padding, Measure(L"Temperature: 100.0 \u00b0C", normalFont).width + 2 * padding});
+    if(contents[0].enabled || contents[2].enabled)contentWidth=(std::max)(contentWidth,Measure(L"PMU unavailable (error 4294967295)",normalFont).width+2*padding);
+    if(contents[2].enabled)contentWidth=(std::max)(contentWidth,Measure(L"LLC MPKI (P): 999999.9",normalFont).width+2*padding);
     if(detailed && contents[4].enabled)for(const auto& group:displayGroups)contentWidth=(std::max)(contentWidth,Measure(CoreKindName(group.kind),normalFont).width+40+temperatureColumnWidth*static_cast<float>(group.physical.size())+2*padding);
     rowHeight = (std::max)(textHeight, static_cast<float>(options[5].value)) + static_cast<float>(options[2].value);
 
@@ -185,6 +199,7 @@ void Layout() {
     }
     if(contents[1].enabled)contentHeight+=(textHeight+4)*2;
     if(contents[2].enabled)contentHeight+=textHeight+4;
+    if(contents[0].enabled || contents[2].enabled)contentHeight+=textHeight+4;
     if(preview)contentHeight+=textHeight+4;
     const int width=Px(contentWidth);
     const int height = (std::min)(Px(contentHeight), static_cast<int>(monitor.rcWork.bottom - monitor.rcWork.top));
@@ -196,9 +211,9 @@ void Layout() {
     if (!SetWindowRgn(windowHandle, region, TRUE)) DeleteObject(region);
     SetLayeredWindowAttributes(windowHandle, 0, static_cast<BYTE>(options[0].value * 255 / 100), LWA_ALPHA);
     interval.store(1000/options[8].value);
-    memoryEnabled.store(contents[1].enabled);
+    memoryEnabled.store(contents[1].enabled);pmuOptions.store((contents[0].enabled?1u:0u) | (contents[2].enabled?2u:0u) | (advanced?4u:0u));
     scrollOffset = std::clamp(scrollOffset, 0, (std::max)(0, Px(contentHeight) - height));
-    InvalidateRect(windowHandle, nullptr, FALSE);
+    InvalidateRect(windowHandle, nullptr, FALSE);SyncTmaWindow();
 }
 void DrawTextLine(const std::wstring& text, IDWriteTextFormat* font, float x, float y, float width, float height, ID2D1SolidColorBrush* brush) {
     target->DrawText(text.c_str(), static_cast<UINT32>(text.size()), font, D2D1::RectF(x,y,x+width,y+height), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -210,8 +225,8 @@ void Paint() {
         if(target){target->CreateSolidColorBrush(D2D1::ColorF(0xEDF3FF),&textBrush);target->CreateSolidColorBrush(D2D1::ColorF(0xA5B4CD),&mutedBrush);target->CreateSolidColorBrush(D2D1::ColorF(0x29354A),&backgroundBrush);target->CreateSolidColorBrush(D2D1::ColorF(0x429BFF),&blueBrush);target->CreateSolidColorBrush(D2D1::ColorF(0x2055AD),&kernelBrush);target->CreateSolidColorBrush(D2D1::ColorF(0xFFA640),&orangeBrush);target->CreateSolidColorBrush(D2D1::ColorF(0xFF5E65),&redBrush);}
     }
     if(target && normalFont && titleFont && textBrush && mutedBrush && backgroundBrush && blueBrush && kernelBrush && orangeBrush && redBrush){
-        static std::vector<Row> snapshot;static HardwareReading sensors;static std::vector<int> alerts;std::wstring status;int packageAlert=0;
-        {std::lock_guard<std::mutex> lock(dataMutex);snapshot=rows;sensors=hardwareReading;alerts=temperatureAlerts;packageAlert=packageTemperatureAlert;status=sampleStatus;if(selfTesting && publishedAt>0 && paintLatencies.size()<4000){paintLatencies.push_back((MonotonicSeconds()-publishedAt)*1000);publishedAt=0;}}
+        static std::vector<Row> snapshot;static HardwareReading sensors;static std::vector<int> alerts;std::wstring status;int packageAlert=0;DWORD snapshotPmuError=ERROR_NOT_SUPPORTED;
+        {std::lock_guard<std::mutex> lock(dataMutex);snapshot=rows;sensors=hardwareReading;alerts=temperatureAlerts;packageAlert=packageTemperatureAlert;status=sampleStatus;snapshotPmuError=pmuError;if(selfTesting && publishedAt>0 && paintLatencies.size()<4000){paintLatencies.push_back((MonotonicSeconds()-publishedAt)*1000);publishedAt=0;}}
         target->SetDpi(96*scale,96*scale);target->BeginDraw();target->Clear(D2D1::ColorF(0x171E2B));target->SetTransform(D2D1::Matrix3x2F::Translation(0,-static_cast<float>(scrollOffset)/scale));
         auto color=[&](int alert){return alert==2?redBrush:alert==1?orangeBrush:textBrush;};
         auto format=[](double value,const wchar_t* pattern){wchar_t text[96]{};if(value<0)wcscpy_s(text,L"N/A");else swprintf_s(text,pattern,value);return std::wstring(text);};
@@ -219,18 +234,21 @@ void Paint() {
         const float ipcX=contentWidth-p-ipcWidth,freqX=ipcX-frequencyWidth,busyX=freqX-busyWidth,barX=p+labelWidth,barRight=busyX-8;
         DrawTextLine(cpuTitle,titleFont,p,p,width,titleHeight+2,textBrush);
         float y=p+titleHeight+8;
-        auto drawRow=[&](std::size_t i,CoreKind kind){
+        auto drawRow=[&](std::size_t i,CoreKind kind,bool merged=false,bool lastSibling=false){
             const auto& row=snapshot[i];
             const float h=(std::max)(textHeight,static_cast<float>(options[5].value)),textY=y+(h-textHeight)/2;
-            DrawTextLine(detailed?Number(static_cast<int>(i)):L"Core"+Number(static_cast<int>(i)),normalFont,p,textY,labelWidth,textHeight+2,mutedBrush);
-            const float barHeight=detailed && kind==CoreKind::Performance?h:static_cast<float>(options[5].value);
-            const float top=y+(h-barHeight)/2,bottom=top+barHeight;
+            if(!merged)DrawTextLine(Number(static_cast<int>(i)),normalFont,p,textY,labelWidth,textHeight+2,mutedBrush);
+            const bool joined=kind==CoreKind::Performance && (detailed || merged);
+            const float barHeight=joined?h+(!detailed && !lastSibling?static_cast<float>(options[2].value):0):static_cast<float>(options[5].value);
+            const float top=joined?y:y+(h-barHeight)/2,bottom=top+barHeight;
+            if(!(merged && kind==CoreKind::Performance)){
             target->FillRectangle(D2D1::RectF(barX,top,barRight,bottom),backgroundBrush);
             if(row.total>=0)target->FillRectangle(D2D1::RectF(barX,top,barX+(barRight-barX)*static_cast<float>(row.total/100),bottom),row.busyAlert?color(row.busyAlert):blueBrush);
             if(row.kernel>=0)target->FillRectangle(D2D1::RectF(barX,top,barX+(barRight-barX)*static_cast<float>(row.kernel/100),bottom),kernelBrush);
+            }
             if(detailed)DrawTextLine(format(row.total,L"%.0f%%"),normalFont,busyX,textY,busyWidth,textHeight+2,color(row.busyAlert));
-            if(contents[3].enabled)DrawTextLine(format(row.ghz,detailed?L"%.2fG":L"%.1f GHz"),normalFont,freqX,textY,frequencyWidth,textHeight+2,textBrush);
-            if(contents[0].enabled)DrawTextLine(L"N/A",normalFont,ipcX,textY,ipcWidth,textHeight+2,mutedBrush);
+            if(contents[3].enabled && !merged)DrawTextLine(format(row.ghz,detailed?L"%.2fG":L"%.1f GHz"),normalFont,freqX,textY,frequencyWidth,textHeight+2,textBrush);
+            if(contents[0].enabled)DrawTextLine(format(row.ipc,L"%.2f"),normalFont,ipcX,textY,ipcWidth,textHeight+2,row.ipc>=0?textBrush:mutedBrush);
             y+=CoreRowHeight(kind);
         };
         if(detailed){
@@ -248,18 +266,41 @@ void Paint() {
                 std::wstring label=CoreKindName(group.kind);if(group.physical.size()==1)label+=L" "+Number(static_cast<int>(group.physical.front()));
                 DrawTextLine(label,normalFont,p,y,labelWidth+75,textHeight+2,mutedBrush);
                 float temperatureX=contentWidth-p;
-                if(contents[4].enabled)for(auto it=group.physical.rbegin();it!=group.physical.rend();++it){const auto core=*it;temperatureX-=temperatureColumnWidth;DrawTextLine(format(core<sensors.cores.size()?sensors.cores[core].temperature:-1,L"%.0f°"),normalFont,temperatureX,y,temperatureColumnWidth,textHeight+2,color(core<alerts.size()?alerts[core]:0));}
+                if(contents[4].enabled)for(auto it=group.physical.rbegin();it!=group.physical.rend();++it){const auto core=*it;temperatureX-=temperatureColumnWidth;DrawTextLine(format(core<sensors.cores.size()?sensors.cores[core].temperature:-1,L"%.0f°C"),normalFont,temperatureX,y,temperatureColumnWidth,textHeight+2,color(core<alerts.size()?alerts[core]:0));}
                 y+=textHeight+6;
                 for(auto physical:group.physical)for(auto i:topology.cores[physical].siblings)drawRow(i,group.kind);
                 y+=4;
             }
         }else{
-            for(std::size_t i=0;i<snapshot.size();++i)drawRow(i,topology.logical[i].kind);
+            for(std::size_t core=0;core<topology.cores.size();++core){const auto& physical=topology.cores[core];const float startY=y;
+                for(auto i:physical.siblings)if(i<snapshot.size())drawRow(i,physical.kind,true,i==physical.siblings.back());
+                if(physical.kind==CoreKind::Performance){
+                    const float barHeight=(std::min)(static_cast<float>(options[5].value)+5.0f/scale,(y-startY-static_cast<float>(options[2].value))/static_cast<float>(physical.siblings.size())),groupHeight=barHeight*static_cast<float>(physical.siblings.size());
+                    float barY=startY+(y-startY-static_cast<float>(options[2].value)-groupHeight)/2;
+                    for(auto i:physical.siblings)if(i<snapshot.size()){const auto& row=snapshot[i];const float bottom=barY+barHeight;
+                        target->FillRectangle(D2D1::RectF(barX,barY,barRight,bottom),backgroundBrush);
+                        if(row.total>=0)target->FillRectangle(D2D1::RectF(barX,barY,barX+(barRight-barX)*static_cast<float>(row.total/100),bottom),row.busyAlert?color(row.busyAlert):blueBrush);
+                        if(row.kernel>=0)target->FillRectangle(D2D1::RectF(barX,barY,barX+(barRight-barX)*static_cast<float>(row.kernel/100),bottom),kernelBrush);
+                        barY=bottom;
+                    }
+                }
+                const float textY=startY+(y-startY-static_cast<float>(options[2].value)-textHeight)/2;
+                const std::wstring label=(physical.kind==CoreKind::Performance?L"P ":physical.kind==CoreKind::Efficiency?L"E ":L"C ")+Number(static_cast<int>(core));
+                DrawTextLine(label,normalFont,p,textY,labelWidth,textHeight+2,mutedBrush);
+                double ghz=-1;for(auto i:physical.siblings)if(i<snapshot.size() && snapshot[i].ghz>=0){ghz=snapshot[i].ghz;break;}
+                if(contents[3].enabled)DrawTextLine(format(ghz,L"%.1f GHz"),normalFont,freqX,textY,frequencyWidth,textHeight+2,textBrush);
+            }
             if(contents[4].enabled){double hottest=-1;int alert=0;for(std::size_t i=0;i<sensors.cores.size();++i){hottest=(std::max)(hottest,sensors.cores[i].temperature);if(i<alerts.size())alert=(std::max)(alert,alerts[i]);}const float w=Measure(L"Temperature: ",normalFont).width;DrawTextLine(L"Temperature: ",normalFont,p,y,w,textHeight+2,mutedBrush);DrawTextLine(format(hottest,L"%.1f °C"),normalFont,p+w,y,width-w,textHeight+2,color(alert));y+=textHeight+4;}
         }
         // GB/s only: there is no guessed or fixed bandwidth ceiling.
         if(contents[1].enabled){DrawTextLine(L"RAM R: "+format(sensors.readGBs,L"%.1f GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;DrawTextLine(L"RAM W: "+format(sensors.writeGBs,L"%.1f GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
-        if(contents[2].enabled){DrawTextLine(L"LLC MPKI: N/A",normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
+        if(contents[2].enabled){DrawTextLine(L"LLC MPKI (P): "+format(sensors.llcMpki,L"%.1f"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
+        if(contents[0].enabled || contents[2].enabled){
+            wchar_t pmuStatus[96]{};
+            if(snapshotPmuError)swprintf_s(pmuStatus,L"PMU unavailable (error %lu)",snapshotPmuError);
+            else wcscpy_s(pmuStatus,std::any_of(snapshot.begin(),snapshot.end(),[](const Row& row){return row.ipc>=0;})?L"PMU: active (1s updates)":L"PMU: waiting for fresh data");
+            DrawTextLine(pmuStatus,normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;
+        }
         if(preview)DrawTextLine(L"DEMO - simulated CPU data",normalFont,p,y,width,textHeight+2,mutedBrush);
         if(target->EndDraw()==D2DERR_RECREATE_TARGET)DropTarget();
     }
@@ -267,7 +308,7 @@ void Paint() {
 }
 void Sample() {
     wchar_t path[32768]{};GetModuleFileNameW(nullptr,path,32768);std::wstring directory(path);directory=directory.substr(0,directory.find_last_of(L"\\")+1);
-    HardwareSampler hardware(topology);if(!preview)hardware.Initialize(directory,selfTesting);
+    HardwareSampler hardware(topology);PmuSampler pmu(topology);if(!preview)hardware.Initialize(directory,selfTesting);
     if(selfTesting && !preview && !benchmarkSeconds && hardware.Available()) {
         HardwareReading off,on,resumed;
         hardware.Poll(off,false);hardware.Poll(on,true);hardware.Poll(off,false);hardware.Poll(resumed,true);
@@ -290,12 +331,13 @@ void Sample() {
         const double start=MonotonicSeconds(),dt=start-previous;previous=start;
         const bool collected=queryOpen && PdhCollectQueryData(query)==ERROR_SUCCESS;const int selectedMode=usageMode.load();int available=0;
         hardware.Poll(sensors,memoryEnabled.load());
+        const unsigned pmuMode=pmuOptions.load();const auto pmuReading=pmu.Poll(!preview && pmuMode!=0,(pmuMode&2u)!=0,(pmuMode&4u)!=0);sensors.llcMpki=pmuReading.pCoreMpki;
         for(std::size_t i=0;i<next.size();++i){auto& row=next[i];row.total=row.kernel=row.ghz=-1;
             auto readCounter=[&](PDH_HCOUNTER counter){PDH_FMT_COUNTERVALUE value{};if(collected && counter && PdhGetFormattedCounterValue(counter,PDH_FMT_DOUBLE|PDH_FMT_NOCAP100,nullptr,&value)==ERROR_SUCCESS && (value.CStatus==PDH_CSTATUS_VALID_DATA || value.CStatus==PDH_CSTATUS_NEW_DATA) && std::isfinite(value.doubleValue))return (std::max)(value.doubleValue,0.0);return -1.0;};
             row.time=readCounter(total[i]);row.utility=selectedMode?readCounter(utility[i]):-1;
             row.total=selectedMode?row.utility:row.time;row.kernel=readCounter(selectedMode?privilegedUtility[i]:kernel[i]);if(row.total>=0){row.total=(std::min)(row.total,100.0);++available;}if(row.total>=0 && row.kernel>=0)row.kernel=(std::min)(row.total,row.kernel);else row.kernel=-1;
-            if(i<sensors.frequency.size())row.ghz=sensors.frequency[i];
-            if(preview){row.time=row.total=static_cast<double>((i*17+tick*7)%101);row.kernel=row.total*0.3;row.ghz=topology.logical[i].kind==CoreKind::Efficiency?4.0:5.2;}
+            if(i<sensors.frequency.size())row.ghz=sensors.frequency[i];row.ipc=i<pmuReading.ipc.size()?pmuReading.ipc[i]:-1;
+            if(preview){if(selfTesting && benchmarkSeconds)row.ipc=0.5+static_cast<double>((i*7+tick)%20)/10;row.time=row.total=static_cast<double>((i*17+tick*7)%101);row.kernel=row.total*0.3;row.ghz=topology.logical[i].kind==CoreKind::Efficiency?4.0:5.2;}
             row.busyAlert=busyFilters[i].Update(row.time,dt,90,98);
         }
         for(std::size_t i=0;i<sensors.cores.size();++i){auto& core=sensors.cores[i];if(preview){core.temperature=52;core.tjMax=100;}thermalAlerts[i]=thermalFilters[i].Update(core.temperature,dt,static_cast<double>(core.tjMax-15),static_cast<double>(core.tjMax-5));if(core.throttled){thermalAlerts[i]=2;thermalFilters[i].level=2;thermalFilters[i].heldSeconds=0;}}
@@ -303,7 +345,7 @@ void Sample() {
         int packageAlert=packageFilter.Update(sensors.packageTemperature,dt,packageTj-15.0,packageTj-5.0);if(sensors.packageThrottled){packageAlert=2;packageFilter.level=2;packageFilter.heldSeconds=0;}
         const double duration=(MonotonicSeconds()-start)*1000;
         waitMs=static_cast<DWORD>((std::max)(1.0,static_cast<double>(interval.load())-duration));
-        {std::lock_guard<std::mutex> lock(dataMutex);rows.swap(next);hardwareReading=sensors;temperature=sensors.packageTemperature;temperatureAlerts=thermalAlerts;packageTemperatureAlert=packageAlert;pmuError=hardware.PmuError();imcError=hardware.ImcError();sampleIoctls+=sensors.ioctlCount;if(selfTesting && sensors.readGBs>=0 && sensors.writeGBs>=0){bandwidthReadSum+=sensors.readGBs;bandwidthWriteSum+=sensors.writeGBs;bandwidthReadMax=(std::max)(bandwidthReadMax,sensors.readGBs);bandwidthWriteMax=(std::max)(bandwidthWriteMax,sensors.writeGBs);++bandwidthSamples;}if(selfTesting && sampleDurations.size()<4000)sampleDurations.push_back(duration);publishedAt=MonotonicSeconds();sampleStatus=preview?L"DEMO":available==static_cast<int>(next.size())?L"Ready":L"Unavailable";}
+        {std::lock_guard<std::mutex> lock(dataMutex);rows.swap(next);hardwareReading=sensors;temperature=sensors.packageTemperature;temperatureAlerts=thermalAlerts;packageTemperatureAlert=packageAlert;pmuError=pmuReading.error;tmaReading=pmuReading.tma;tmaError=pmuReading.tmaError;tmaPublishedAt=MonotonicSeconds();if(selfTesting && pmuReading.tma.slots)++tmaGoodSamples;imcError=hardware.ImcError();sampleIoctls+=sensors.ioctlCount;if(selfTesting && sensors.readGBs>=0 && sensors.writeGBs>=0){bandwidthReadSum+=sensors.readGBs;bandwidthWriteSum+=sensors.writeGBs;bandwidthReadMax=(std::max)(bandwidthReadMax,sensors.readGBs);bandwidthWriteMax=(std::max)(bandwidthWriteMax,sensors.writeGBs);++bandwidthSamples;}if(selfTesting && pmuReading.pCoreMpki>=0 && std::all_of(pmuReading.ipc.begin(),pmuReading.ipc.end(),[](double ipc){return ipc>=0;}))++pmuGoodSamples;if(selfTesting && sampleDurations.size()<4000)sampleDurations.push_back(duration);publishedAt=MonotonicSeconds();sampleStatus=preview?L"DEMO":available==static_cast<int>(next.size())?L"Ready":L"Unavailable";}
         if(!samplePending.exchange(true))PostMessageW(windowHandle,SampleMessage,0,0);++tick;
     }
     if(query)PdhCloseQuery(query);
@@ -320,7 +362,7 @@ HICON CreateTrayIcon() {
 }
 void Tray(DWORD operation) {
     if (selfTesting) return;
-    NOTIFYICONDATAW data{}; data.cbSize=sizeof(data);data.hWnd=windowHandle;data.uID=1;data.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;data.uCallbackMessage=TrayMessage;data.hIcon=trayIcon;wcscpy_s(data.szTip,L"CPU Freq Moniter 1.5.0");
+    NOTIFYICONDATAW data{}; data.cbSize=sizeof(data);data.hWnd=windowHandle;data.uID=1;data.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;data.uCallbackMessage=TrayMessage;data.hIcon=trayIcon;wcscpy_s(data.szTip,L"CPU Freq Moniter " CPU_FREQ_VERSION_STRING);
     Shell_NotifyIconW(operation,&data);
 }
 void ShowSettings();
@@ -330,11 +372,13 @@ void UpdateSettingsLanguage(HWND hwnd) {
     for(int id:{307,309})SendDlgItemMessageW(hwnd,id,CB_RESETCONTENT,0,0);
     SendDlgItemMessageW(hwnd,307,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(Tr(L"Detailed",L"详细模式")));
     SendDlgItemMessageW(hwnd,307,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(Tr(L"Compact",L"精简模式")));
-    SendDlgItemMessageW(hwnd,307,CB_SETCURSEL,detailed?0:1,0);
-    for(const auto* label:{Tr(L"Small",L"小号"),Tr(L"Default",L"默认"),Tr(L"Custom",L"自定义")})SendDlgItemMessageW(hwnd,309,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label));
-    int selectedPreset=2;
+    SendDlgItemMessageW(hwnd,307,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(Tr(L"Advanced",L"进阶模式")));
+    SendDlgItemMessageW(hwnd,307,CB_SETCURSEL,advanced?2:detailed?0:1,0);
+    for(const auto* label:{Tr(L"Small",L"小号"),Tr(L"Default",L"默认"),Tr(L"Very small",L"很小"),Tr(L"Custom",L"自定义")})SendDlgItemMessageW(hwnd,309,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label));
+    int selectedPreset=3;
     if(options[1].value==280 && options[2].value==3 && options[3].value==16 && options[4].value==11 && options[5].value==10 && options[6].value==10 && options[7].value==10)selectedPreset=0;
     if(options[1].value==340 && options[2].value==5 && options[3].value==19 && options[4].value==13 && options[5].value==12 && options[6].value==14 && options[7].value==12)selectedPreset=1;
+    if(options[0].value==92 && options[1].value==250 && options[2].value==1 && options[3].value==16 && options[4].value==9 && options[5].value==6 && options[6].value==10 && options[7].value==10 && options[8].value==1 && options[9].value==1)selectedPreset=2;
     SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selectedPreset,0);
     for(int i=0;i<ContentCount;++i){SetWindowTextW(GetDlgItem(hwnd,400+i),Tr(contents[i].en,contents[i].zh));SendDlgItemMessageW(hwnd,400+i,BM_SETCHECK,contents[i].enabled?BST_CHECKED:BST_UNCHECKED,0);}
     TCITEMW item{};item.mask=TCIF_TEXT;
@@ -392,7 +436,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
     case WM_COMMAND: {
         const int id=LOWORD(w);
         if(id>=400 && id<400+ContentCount && HIWORD(w)==BN_CLICKED){contents[id-400].enabled=SendDlgItemMessageW(hwnd,id,BM_GETCHECK,0,0)==BST_CHECKED;Layout();if(!selfTesting)SaveSettings();return 0;}
-        if((id==307 || id==309) && HIWORD(w)==CBN_SELCHANGE){const int selected=static_cast<int>(SendDlgItemMessageW(hwnd,id,CB_GETCURSEL,0,0));if(selected>=0 && selected<2){if(id==307)detailed=selected==0;else {ApplyPreset(selected);for(int i=0;i<OptionCount;++i)SetWindowTextW(edits[i],Number(options[i].value).c_str());SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selected,0);}Layout();if(!selfTesting)SaveSettings();}return 0;}
+        if((id==307 || id==309) && HIWORD(w)==CBN_SELCHANGE){const int selected=static_cast<int>(SendDlgItemMessageW(hwnd,id,CB_GETCURSEL,0,0));if(selected>=0 && selected<3){if(id==307){advanced=selected==2;detailed=selected!=1;}else {ApplyPreset(selected);for(int i=0;i<OptionCount;++i)SetWindowTextW(edits[i],Number(options[i].value).c_str());SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selected,0);}Layout();if(!selfTesting)SaveSettings();}return 0;}
 
         if((id==303 || id==305) && HIWORD(w)==CBN_SELCHANGE) {
             const int selected=static_cast<int>(SendDlgItemMessageW(hwnd,id,CB_GETCURSEL,0,0));
@@ -405,7 +449,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
         if(id==301 || id==IDCANCEL) { DestroyWindow(hwnd);return 0; }
         if(id>=100 && id<100+OptionCount && (HIWORD(w)==EN_CHANGE || HIWORD(w)==EN_KILLFOCUS) && settingsHandle) {
             const int i=id-100; BOOL valid=FALSE; const UINT value=GetDlgItemInt(hwnd,id,&valid,FALSE);
-            if(valid && value>=static_cast<UINT>(options[i].minimum) && value<=static_cast<UINT>(options[i].maximum)) {options[i].value=static_cast<int>(value);if(i>=1 && i<=7)SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,2,0);Layout();if(!selfTesting) SaveSettings();}
+            if(valid && value>=static_cast<UINT>(options[i].minimum) && value<=static_cast<UINT>(options[i].maximum)) {options[i].value=static_cast<int>(value);SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,3,0);Layout();if(!selfTesting) SaveSettings();}
             else if(HIWORD(w)==EN_KILLFOCUS) SetWindowTextW(edits[i],Number(options[i].value).c_str());
         }
         return 0;
@@ -420,8 +464,66 @@ void ShowSettings() {
     if(!settingsHandle) settingsHandle=CreateWindowExW(WS_EX_TOOLWINDOW,L"CpuFreqSettings",L"CPU Freq Moniter - Settings",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,CW_USEDEFAULT,CW_USEDEFAULT,400,520,windowHandle,nullptr,GetModuleHandleW(nullptr),nullptr);
     ShowWindow(settingsHandle,SW_SHOW);SetForegroundWindow(settingsHandle);
 }
+
+struct TmaLine {std::wstring label,value;bool heading=false;};
+std::vector<TmaLine> TmaLines(){
+ TmaReading reading;DWORD error;double published;
+ {std::lock_guard<std::mutex> lock(dataMutex);reading=tmaReading;error=tmaError;published=tmaPublishedAt;}
+ if(MonotonicSeconds()-published>2)reading={};
+ auto value=[](double number){wchar_t text[64]{};if(number<0 || !std::isfinite(number))return std::wstring(L"N/A");swprintf_s(text,L"%.1f%%",number);return std::wstring(text);};
+ std::vector<TmaLine> lines={{L"TMA · P cores",L"",true},{Tr(L"% of all P-core slots · ~1s",L"占 P 核总槽位 · 约 1 秒"),L""},
+  {L"Retiring",value(reading.retiring)},{L"Frontend Bound *",value(reading.frontend)},{L"Bad Speculation *",value(reading.badSpec)},{L"Backend Bound",value(reading.backend)},
+  {L"Backend:",L"",true},{L"  Core Bound *",value(reading.core)},{L"  Memory Bound *",value(reading.memory)},
+  {L"Memory:",L"",true},{L"  L1",L"N/A"},{L"  L2",L"N/A"},{L"  L3",L"N/A"},{L"  DRAM",L"N/A"},
+  {Tr(L"* Unvalidated / estimated",L"* 未验证 / 估算"),L""},{Tr(L"L1–DRAM: not collected",L"L1–DRAM：尚未采集"),L""}};
+ if(error){lines.push_back({Tr(L"PMU unavailable: ",L"PMU 不可用：")+std::to_wstring(error),L""});}
+ else lines.push_back({reading.slots?Tr(L"PMU active",L"PMU 采集中"):Tr(L"Waiting for valid counters",L"等待有效计数"),L""});
+ return lines;
+}
+struct TmaMetrics {int pad=0,gap=0,line=0,title=0,width=0,height=0,value=0;};
+TmaMetrics MeasureTma(HDC dc,HFONT font,HFONT bold,const std::vector<TmaLine>& lines,float dpi){
+ TmaMetrics m;m.pad=static_cast<int>(std::ceil(options[6].value*dpi));m.gap=static_cast<int>(std::ceil((std::max)(1,options[2].value)*dpi));
+ SelectObject(dc,font);TEXTMETRICW tm{};GetTextMetricsW(dc,&tm);m.line=tm.tmHeight+2;m.value=0;int w=0;
+ for(const auto& row:lines){SelectObject(dc,row.heading?bold:font);SIZE label{},value{};GetTextExtentPoint32W(dc,row.label.c_str(),static_cast<int>(row.label.size()),&label);const std::wstring valueText=row.value.size()>6?row.value:L"999.9%";GetTextExtentPoint32W(dc,valueText.c_str(),static_cast<int>(valueText.size()),&value);m.value=(std::max)(m.value,static_cast<int>(value.cx)+m.gap*2);w=(std::max)(w,static_cast<int>(label.cx)+(row.value.empty()?0:static_cast<int>(value.cx)+m.gap*3));}
+ SelectObject(dc,bold);GetTextMetricsW(dc,&tm);m.title=tm.tmHeight+2;m.width=(std::max)(static_cast<int>(std::ceil(options[1].value*dpi)),w+2*m.pad);m.height=2*m.pad;
+ for(const auto& row:lines)m.height+=(row.heading?m.title:m.line)+m.gap;
+ return m;
+}
+HFONT TmaFont(float dpi,bool title){return CreateFontW(-static_cast<int>(std::ceil((title?options[3].value:options[4].value)*dpi)),0,0,0,title?FW_BOLD:FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");}
+void SyncTmaWindow(){
+ if(!windowHandle)return;
+ if(!advanced){if(tmaHandle)ShowWindow(tmaHandle,SW_HIDE);return;}
+ if(!tmaHandle){RECT main{};GetWindowRect(windowHandle,&main);tmaHandle=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_LAYERED,L"CpuFreqTma",L"CPU Freq Moniter v" CPU_FREQ_VERSION_STRING L" - TMA (P cores)",WS_POPUP,tmaX==CW_USEDEFAULT?main.right+8:tmaX,tmaY==CW_USEDEFAULT?main.top:tmaY,1,1,windowHandle,nullptr,GetModuleHandleW(nullptr),nullptr);}
+ if(!tmaHandle)return;
+ const float dpi=static_cast<float>(GetDpiForWindow(tmaHandle))/96;HDC dc=GetDC(tmaHandle);HFONT font=TmaFont(dpi,false),bold=TmaFont(dpi,true);HGDIOBJ old=SelectObject(dc,font);const auto metrics=MeasureTma(dc,font,bold,TmaLines(),dpi);SelectObject(dc,old);DeleteObject(font);DeleteObject(bold);ReleaseDC(tmaHandle,dc);
+ RECT current{};GetWindowRect(tmaHandle,&current);MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromWindow(tmaHandle,MONITOR_DEFAULTTONEAREST),&monitor);
+ const int width=(std::min)(metrics.width,static_cast<int>(monitor.rcWork.right-monitor.rcWork.left)),height=(std::min)(metrics.height,static_cast<int>(monitor.rcWork.bottom-monitor.rcWork.top));
+ tmaFullHeight=metrics.height;tmaScroll=std::clamp(tmaScroll,0,(std::max)(0,tmaFullHeight-height));
+ SetWindowPos(tmaHandle,options[9].value?HWND_TOPMOST:HWND_NOTOPMOST,std::clamp(current.left,monitor.rcWork.left,monitor.rcWork.right-width),std::clamp(current.top,monitor.rcWork.top,monitor.rcWork.bottom-height),width,height,SWP_NOACTIVATE);
+ SetLayeredWindowAttributes(tmaHandle,0,static_cast<BYTE>(options[0].value*255/100),LWA_ALPHA);const int radius=static_cast<int>(std::ceil(options[7].value*2*dpi));HRGN region=CreateRoundRectRgn(0,0,width+1,height+1,radius,radius);if(!SetWindowRgn(tmaHandle,region,TRUE))DeleteObject(region);
+ ShowWindow(tmaHandle,IsWindowVisible(windowHandle)?SW_SHOWNOACTIVATE:SW_HIDE);InvalidateRect(tmaHandle,nullptr,FALSE);
+}
+LRESULT CALLBACK TmaProc(HWND hwnd,UINT message,WPARAM w,LPARAM l){
+ switch(message){
+ case WM_PAINT:{PAINTSTRUCT ps{};HDC screen=BeginPaint(hwnd,&ps);RECT client{};GetClientRect(hwnd,&client);HDC dc=CreateCompatibleDC(screen);HBITMAP bitmap=CreateCompatibleBitmap(screen,client.right,client.bottom);HGDIOBJ oldBitmap=SelectObject(dc,bitmap);
+  HBRUSH background=CreateSolidBrush(RGB(23,30,43));FillRect(dc,&client,background);DeleteObject(background);SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(237,243,255));
+  const float dpi=static_cast<float>(GetDpiForWindow(hwnd))/96;HFONT font=TmaFont(dpi,false),bold=TmaFont(dpi,true);HGDIOBJ oldFont=SelectObject(dc,font);const auto lines=TmaLines();const auto metrics=MeasureTma(dc,font,bold,lines,dpi);int y=metrics.pad-tmaScroll;
+  for(const auto& row:lines){SelectObject(dc,row.heading?bold:font);const int h=row.heading?metrics.title:metrics.line;RECT label{metrics.pad,y,client.right-metrics.pad-(row.value.empty()?0:metrics.value),y+h};DrawTextW(dc,row.label.c_str(),-1,&label,DT_LEFT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);if(!row.value.empty()){RECT value{client.right-metrics.pad-metrics.value,y,client.right-metrics.pad,y+h};DrawTextW(dc,row.value.c_str(),-1,&value,DT_RIGHT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);}y+=h+metrics.gap;}
+  BitBlt(screen,0,0,client.right,client.bottom,dc,0,0,SRCCOPY);SelectObject(dc,oldFont);DeleteObject(font);DeleteObject(bold);SelectObject(dc,oldBitmap);DeleteObject(bitmap);DeleteDC(dc);EndPaint(hwnd,&ps);return 0;}
+ case WM_ERASEBKGND:return 1;
+ case WM_LBUTTONDOWN:ReleaseCapture();SendMessageW(hwnd,WM_NCLBUTTONDOWN,HTCAPTION,l);return 0;
+ case WM_EXITSIZEMOVE:{RECT rect{};GetWindowRect(hwnd,&rect);tmaX=rect.left;tmaY=rect.top;SyncTmaWindow();if(!selfTesting)SaveSettings();return 0;}
+ case WM_DPICHANGED:{const RECT* rect=reinterpret_cast<RECT*>(l);SetWindowPos(hwnd,nullptr,rect->left,rect->top,0,0,SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);SyncTmaWindow();return 0;}
+ case WM_DISPLAYCHANGE:SyncTmaWindow();return 0;
+ case WM_MOUSEWHEEL:{RECT client{};GetClientRect(hwnd,&client);const int step=static_cast<int>(std::ceil(options[4].value*3.f*GetDpiForWindow(hwnd)/96));tmaScroll=std::clamp(tmaScroll-GET_WHEEL_DELTA_WPARAM(w)/WHEEL_DELTA*step,0,(std::max)(0,tmaFullHeight-static_cast<int>(client.bottom)));InvalidateRect(hwnd,nullptr,FALSE);return 0;}
+ case WM_RBUTTONUP:ShowSettings();return 0;
+ case WM_CLOSE:advanced=false;Layout();if(settingsHandle)UpdateSettingsLanguage(settingsHandle);if(!selfTesting)SaveSettings();return 0;
+ case WM_DESTROY:tmaHandle=nullptr;return 0;
+ default:return DefWindowProcW(hwnd,message,w,l);
+ }
+}
 HMENU CreateTrayMenu(HWND hwnd) {
-    HMENU menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING|(detailed?MF_CHECKED:0),5,Tr(L"Detailed mode",L"详细模式"));AppendMenuW(menu,MF_STRING|(!detailed?MF_CHECKED:0),6,Tr(L"Compact mode",L"精简模式"));AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,1,IsWindowVisible(hwnd)?Tr(L"Hide overlay",L"隐藏浮窗"):Tr(L"Show overlay",L"显示浮窗"));AppendMenuW(menu,MF_STRING,2,Tr(L"Settings",L"打开设置"));AppendMenuW(menu,MF_STRING,3,Tr(L"About",L"关于"));AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,4,Tr(L"Exit",L"退出"));
+    HMENU menu=CreatePopupMenu();AppendMenuW(menu,MF_STRING|(detailed && !advanced?MF_CHECKED:0),5,Tr(L"Detailed mode",L"详细模式"));AppendMenuW(menu,MF_STRING|(!detailed?MF_CHECKED:0),6,Tr(L"Compact mode",L"精简模式"));AppendMenuW(menu,MF_STRING|(advanced?MF_CHECKED:0),7,Tr(L"Advanced mode",L"进阶模式"));AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,1,IsWindowVisible(hwnd)?Tr(L"Hide overlay",L"隐藏浮窗"):Tr(L"Show overlay",L"显示浮窗"));AppendMenuW(menu,MF_STRING,2,Tr(L"Settings",L"打开设置"));AppendMenuW(menu,MF_STRING,3,Tr(L"About",L"关于"));AppendMenuW(menu,MF_SEPARATOR,0,nullptr);AppendMenuW(menu,MF_STRING,4,Tr(L"Exit",L"退出"));
     return menu;
 }
 LRESULT CALLBACK WindowProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
@@ -433,30 +535,30 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
     case WM_SIZE: if(target) target->Resize(D2D1::SizeU(LOWORD(l),HIWORD(l))); return 0;
     case WM_LBUTTONDOWN: ReleaseCapture();SendMessageW(hwnd,WM_NCLBUTTONDOWN,HTCAPTION,l);return 0;
     case WM_NCLBUTTONDBLCLK:
-    case WM_LBUTTONDBLCLK:ShowWindow(hwnd,SW_HIDE);return 0;
+    case WM_LBUTTONDBLCLK:ShowWindow(hwnd,SW_HIDE);SyncTmaWindow();return 0;
     case WM_EXITSIZEMOVE: Layout();if(!selfTesting) SaveSettings();return 0;
     case WM_MOUSEWHEEL: { RECT r{};GetClientRect(hwnd,&r);scrollOffset=std::clamp(scrollOffset-GET_WHEEL_DELTA_WPARAM(w)/WHEEL_DELTA*Px(rowHeight*3),0,(std::max)(0,Px(contentHeight)-static_cast<int>(r.bottom)));InvalidateRect(hwnd,nullptr,FALSE);return 0; }
     case WM_DPICHANGED: {scale=static_cast<float>(HIWORD(w))/96;const RECT* r=reinterpret_cast<RECT*>(l);SetWindowPos(hwnd,nullptr,r->left,r->top,0,0,SWP_NOSIZE|SWP_NOZORDER);Layout();return 0;}
     case WM_DISPLAYCHANGE:Layout();return 0;
-    case SampleMessage:samplePending.store(false);InvalidateRect(hwnd,nullptr,FALSE);return 0;
+    case SampleMessage:samplePending.store(false);InvalidateRect(hwnd,nullptr,FALSE);if(tmaHandle)SyncTmaWindow();return 0;
     case TrayMessage:
         if(l==WM_LBUTTONUP) ShowSettings();
         if(l==WM_RBUTTONUP) {
             HMENU menu=CreateTrayMenu(hwnd);
             POINT p{};GetCursorPos(&p);SetForegroundWindow(hwnd);const UINT command=static_cast<UINT>(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,hwnd,nullptr));DestroyMenu(menu);PostMessageW(hwnd,WM_NULL,0,0);
-            if(command==1) ShowWindow(hwnd,IsWindowVisible(hwnd)?SW_HIDE:SW_SHOWNOACTIVATE);
+            if(command==1){ShowWindow(hwnd,IsWindowVisible(hwnd)?SW_HIDE:SW_SHOWNOACTIVATE);SyncTmaWindow();}
             if(command==2) ShowSettings();
-            if(command==3) MessageBoxW(hwnd,Tr(L"CPU Freq Moniter 1.5.0\nIntel frequency via PawnIO\nTemperature: core and package sensors\nBlue = total; dark blue = kernel portion\nDrag anywhere; double-click to hide.\nMouse wheel scrolls tall overlays.",L"CPU Freq Moniter 1.5.0\n通过 PawnIO 读取 Intel 频率\n温度：核心与封装传感器\n蓝色表示总占用，深蓝色表示其中的内核占用\n任意位置拖动；双击隐藏。\n超高浮窗可用滚轮查看。"),Tr(L"About",L"关于"),MB_OK);
+            if(command==3) MessageBoxW(hwnd,Tr(L"CPU Freq Moniter " CPU_FREQ_VERSION_STRING L"\nIntel frequency via PawnIO\nTemperature: core and package sensors\nBlue = total; dark blue = kernel portion\nDrag anywhere; double-click to hide.\nMouse wheel scrolls tall overlays.",L"CPU Freq Moniter " CPU_FREQ_VERSION_STRING L"\n通过 PawnIO 读取 Intel 频率\n温度：核心与封装传感器\n蓝色表示总占用，深蓝色表示其中的内核占用\n任意位置拖动；双击隐藏。\n超高浮窗可用滚轮查看。"),Tr(L"About",L"关于"),MB_OK);
             if(command==4) DestroyWindow(hwnd);
-            if(command==5 || command==6){detailed=command==5;Layout();if(settingsHandle)UpdateSettingsLanguage(settingsHandle);if(!selfTesting)SaveSettings();}
+            if(command==5 || command==6 || command==7){advanced=command==7;detailed=command!=6;Layout();if(settingsHandle)UpdateSettingsLanguage(settingsHandle);if(!selfTesting)SaveSettings();}
         }return 0;
-    case WM_CLOSE:ShowWindow(hwnd,SW_HIDE);return 0;
-    case WM_DESTROY:if(!selfTesting)SaveSettings();Tray(NIM_DELETE);SetEvent(stopEvent);PostQuitMessage(0);return 0;
+    case WM_CLOSE:ShowWindow(hwnd,SW_HIDE);SyncTmaWindow();return 0;
+    case WM_DESTROY:if(tmaHandle)DestroyWindow(tmaHandle);if(!selfTesting)SaveSettings();Tray(NIM_DELETE);SetEvent(stopEvent);PostQuitMessage(0);return 0;
     default:return DefWindowProcW(hwnd,message,w,l);
     }
 }
 }
-int RunMonitor(bool demo, bool selfTest, int benchmark) {
+int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTma,int inspectMode) {
     preview=demo;selfTesting=selfTest;benchmarkSeconds=benchmark;
     struct InstanceGuard { HANDLE handle=nullptr; ~InstanceGuard() { if(handle) CloseHandle(handle); } } instance;
     activateMessage=RegisterWindowMessageW(L"CpuFreqMonitor.Activate.v1");
@@ -486,14 +588,15 @@ int RunMonitor(bool demo, bool selfTest, int benchmark) {
     topology=DetectTopology();cpuTitle=ShortCpuName(topology.name);BuildDisplayGroups();for(const auto& cpu:topology.logical)rows.push_back({cpu.group,cpu.number});
     if(rows.empty()){MessageBoxW(nullptr,L"Cannot obtain reliable CPU topology.",L"CPU Freq Moniter",MB_ICONERROR);return 1;}
     processorCount = rows.size();
-    LoadSettings();stopEvent=CreateEventW(nullptr,TRUE,FALSE,nullptr);if(!stopEvent)return 1;
+    LoadSettings();if(testTma)advanced=detailed=true;if(inspectMode==1){detailed=advanced=false;}if(inspectMode>=0)ApplyPreset(2);if(inspectMode==1)contents[0].enabled=true;if(testPmu){contents[0].enabled=true;contents[2].enabled=true;}stopEvent=CreateEventW(nullptr,TRUE,FALSE,nullptr);if(!stopEvent)return 1;
     WNDCLASSEXW cls{sizeof(cls)};cls.style=CS_DBLCLKS;cls.lpfnWndProc=WindowProc;cls.hInstance=GetModuleHandleW(nullptr);cls.hCursor=LoadCursorW(nullptr,IDC_ARROW);cls.lpszClassName=selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay";RegisterClassExW(&cls);
+    cls.style=0;cls.lpfnWndProc=TmaProc;cls.lpszClassName=L"CpuFreqTma";RegisterClassExW(&cls);
     cls.style=0;cls.lpfnWndProc=SettingsProc;cls.lpszClassName=L"CpuFreqSettings";cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_BTNFACE+1);RegisterClassExW(&cls);
-    windowHandle=CreateWindowExW(((preview && !selfTest) || benchmark==60 ? WS_EX_APPWINDOW : WS_EX_TOOLWINDOW)|WS_EX_LAYERED,selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay",L"CPU Freq Moniter",WS_POPUP,savedX==CW_USEDEFAULT?100:savedX,savedY==CW_USEDEFAULT?100:savedY,340,200,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    windowHandle=CreateWindowExW(((preview && !selfTest) || (benchmark>=60 && testPmu) || benchmark==60 ? WS_EX_APPWINDOW : WS_EX_TOOLWINDOW)|WS_EX_LAYERED,selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay",selfTest?L"CPU Freq Moniter v" CPU_FREQ_VERSION_STRING L" (test)":L"CPU Freq Moniter",WS_POPUP,inspectMode==1?900:savedX==CW_USEDEFAULT?100:savedX,savedY==CW_USEDEFAULT?100:savedY,340,200,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
     if(!windowHandle)return 1;
+    if(inspectMode>=0)SetWindowTextW(windowHandle,inspectMode==1?L"v" CPU_FREQ_VERSION_STRING L" Compact layout (DEMO)":L"v" CPU_FREQ_VERSION_STRING L" Advanced (LIVE)");
     scale=static_cast<float>(GetDpiForWindow(windowHandle))/96;Layout();trayIcon=CreateTrayIcon();taskbarCreated=RegisterWindowMessageW(L"TaskbarCreated");ChangeWindowMessageFilterEx(windowHandle,taskbarCreated,MSGFLT_ALLOW,nullptr);ChangeWindowMessageFilterEx(windowHandle,activateMessage,MSGFLT_ALLOW,nullptr);Tray(NIM_ADD);
-    ShowWindow(windowHandle,SW_SHOWNOACTIVATE);
-    ShowWindow(windowHandle,SW_SHOWNOACTIVATE);
+    ShowWindow(windowHandle,SW_SHOWNOACTIVATE);SyncTmaWindow();
     std::thread worker(Sample);
     if(selfTest) SetTimer(windowHandle,99,benchmark?static_cast<UINT>((benchmark+3)*1000):2500,nullptr);
     FILETIME created{},exited{},kernelStart{},userStart{};GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernelStart,&userStart);double benchmarkStart=MonotonicSeconds();if(benchmark)SetTimer(windowHandle,98,3000,nullptr);
@@ -542,6 +645,14 @@ int RunMonitor(bool demo, bool selfTest, int benchmark) {
             detailed=true;contents[0].enabled=false;Layout();
             if(CoreRowHeight(CoreKind::Performance)!=(std::max)(textHeight,static_cast<float>(options[5].value)))result=21;
             TabCtrl_SetCurSel(GetDlgItem(settingsHandle,500),0);SendMessageW(settingsHandle,WM_NOTIFY,500,reinterpret_cast<LPARAM>(&changed));
+            SendDlgItemMessageW(settingsHandle,307,CB_SETCURSEL,2,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(307,CBN_SELCHANGE),0);
+            if(!advanced || !detailed || !(pmuOptions.load()&4u) || !tmaHandle || !IsWindowVisible(tmaHandle))result=28;
+            SaveSettings();advanced=false;ReadPreferences();if(!advanced || !detailed)result=29;
+            SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,2,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
+            if(options[1].value!=250 || options[4].value!=9 || options[8].value!=1)result=30;
+            SendDlgItemMessageW(settingsHandle,307,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(307,CBN_SELCHANGE),0);
+            if(advanced || detailed || (pmuOptions.load()&4u) || IsWindowVisible(tmaHandle))result=31;
+            SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
             std::printf("New UI checks: mode/presets/refresh/tabs/content/persistence/EN/P-core spacing exit=%d\n",result);
             SetWindowTextW(edits[4],L"36");SetWindowTextW(edits[1],L"220");
             if(contentWidth-labelWidth-frequencyWidth-ipcWidth-busyWidth-2*options[6].value<32)result=2;
@@ -549,8 +660,7 @@ int RunMonitor(bool demo, bool selfTest, int benchmark) {
             SetWindowTextW(edits[0],L"1");SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(100,EN_KILLFOCUS),reinterpret_cast<LPARAM>(edits[0]));
             if(options[0].value!=92) result=3;
             SendMessageW(windowHandle,WM_LBUTTONDBLCLK,0,0);if(IsWindowVisible(windowHandle))result=4;
-            ShowWindow(windowHandle,SW_SHOWNOACTIVATE);
-    ShowWindow(windowHandle,SW_SHOWNOACTIVATE);UpdateWindow(windowHandle);
+            ShowWindow(windowHandle,SW_SHOWNOACTIVATE);SyncTmaWindow();UpdateWindow(windowHandle);
             {std::lock_guard<std::mutex> lock(dataMutex);if(preview && rows[0].total<0)result=5; std::printf("Sensor mode: %s; temperature=%.1f C\n",preview?"demo":"hardware",temperature); for(std::size_t i=0;i<rows.size();++i) std::printf("Core%zu total=%.2f kernel=%.2f GHz=%.3f time=%.2f utility=%.2f\n",i,rows[i].total,rows[i].kernel,rows[i].ghz,rows[i].time,rows[i].utility);}
             std::printf("UI checks exit=%d\n",result); std::fflush(stdout); DestroyWindow(settingsHandle);DestroyWindow(windowHandle);continue;
         }
@@ -567,6 +677,10 @@ int RunMonitor(bool demo, bool selfTest, int benchmark) {
         if(bandwidthSamples)std::printf("RAM mean R=%.3f W=%.3f max R=%.3f W=%.3f GB/s\n",bandwidthReadSum/bandwidthSamples,bandwidthWriteSum/bandwidthSamples,bandwidthReadMax,bandwidthWriteMax);
         std::sort(paintLatencies.begin(),paintLatencies.end());if(!paintLatencies.empty())std::printf("publish_to_paint_p95=%.3fms paints=%zu\n",paintLatencies[static_cast<std::size_t>(static_cast<double>(paintLatencies.size()-1)*.95)],paintLatencies.size());
         std::printf("CPU family=%X model=%X physical=%zu logical=%zu package_temp=%.1f power=%.2f RAM_R=%.3f RAM_W=%.3f PMU_error=%lu IMC_error=%lu\n",topology.family,topology.model,topology.cores.size(),topology.logical.size(),hardwareReading.packageTemperature,hardwareReading.packageWatts,hardwareReading.readGBs,hardwareReading.writeGBs,pmuError,imcError);
+        std::printf("TMA valid_samples=%u error=%lu slots=%llu Retiring=%.3f Frontend=%.3f BadSpec=%.3f Backend=%.3f Core=%.3f Memory=%.3f\n",tmaGoodSamples,tmaError,tmaReading.slots,tmaReading.retiring,tmaReading.frontend,tmaReading.badSpec,tmaReading.backend,tmaReading.core,tmaReading.memory);
+        if(testTma && tmaGoodSamples<3)result=27;
+        if(testPmu && pmuGoodSamples<3)result=26;std::printf("ETW valid_samples=%u\n",pmuGoodSamples);
+        std::printf("ETW IPC valid=%zu/%zu LLC_MPKI_P=%.4f\n",static_cast<std::size_t>(std::count_if(rows.begin(),rows.end(),[](const Row& row){return row.ipc>=0;})),rows.size(),hardwareReading.llcMpki);
         for(std::size_t i=0;i<topology.logical.size();++i){const auto& cpu=topology.logical[i];std::printf("LP%zu group=%u number=%u physical=%u package=%u kind=%u APIC=%u hwcore=%u PMUv=%u fixed=%u width=%u\n",i,cpu.group,cpu.number,cpu.physical,cpu.package,static_cast<unsigned>(cpu.kind),cpu.apicId,cpu.hardwareCore,cpu.pmuVersion,cpu.fixedCount,cpu.fixedWidth);}
         std::fflush(stdout);
     }

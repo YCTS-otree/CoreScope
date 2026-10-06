@@ -85,7 +85,7 @@ void HardwareSampler::Initialize(const std::wstring& directory, bool diagnostics
     for(std::size_t i=0;i<topology_.cores.size();++i){Affinity a(topology_.logical[topology_.cores[i].siblings.front()]);std::uint64_t value=0;if(a.Valid() && msr_.ReadMsr(IntelRegisters::TjMax,value,error)){const int tj=static_cast<int>((value>>16)&255);if(tj>0 && tj<=125)tjMax_[i]=tj;}}
     for(unsigned package=0;package<topology_.packages;++package){Package p;for(std::size_t i=0;i<topology_.logical.size();++i)if(topology_.logical[i].package==package){p.representative=i;p.tjMax=tjMax_[topology_.logical[i].physical];break;}Affinity a(topology_.logical[p.representative]);std::uint64_t unit=0;if(a.Valid() && msr_.ReadMsr(IntelRegisters::RaplUnit,unit,error))p.energyUnit=std::ldexp(1.0,-static_cast<int>((unit>>8)&31));packages_.push_back(p);}
     // Capability probe only; never reprogram counters owned by Windows/profilers.
-    // 0.2.11 rejects IA32_FIXED_CTR0; IPC and LLC/MPKI must stay unavailable.
+    // PawnIO rejects IA32_FIXED_CTR0; live IPC/MPKI use the independent ETW backend.
     std::uint64_t probe=0;msr_.ReadMsr(IntelRegisters::FixedCtr0,probe,pmuError_);
     directory_=directory;diagnostics_=diagnostics;
 }

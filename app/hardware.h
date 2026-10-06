@@ -23,7 +23,7 @@ struct HardwareReading {
     std::vector<CoreReading> cores;
     bool packageThrottled=false;
     double packageTemperature=-1, packageWatts=-1, readGBs=-1, writeGBs=-1;
-    // No guessed PMU values. Signed module currently denies these counters.
+    // MPKI is filled independently by PmuSampler; unavailable values stay negative.
     double llcMissRate=-1, llcReferenceRate=-1, llcMpki=-1;
     std::uint64_t ioctlCount=0;
 };

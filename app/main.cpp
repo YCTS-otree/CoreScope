@@ -112,6 +112,11 @@ std::vector<ProcessorLocation> EnumerateProcessors()
 
 int wmain(int argc, wchar_t* argv[])
 {
+    if(argc==2 && wcscmp(argv[1],L"--tma-test")==0)return RunMonitor(false,true,20,true,true);
+    if(argc==2 && wcscmp(argv[1],L"--advanced-inspect")==0)return RunMonitor(false,true,900,true,true,2);
+    if(argc==2 && wcscmp(argv[1],L"--compact-inspect")==0)return RunMonitor(true,true,900,true,false,1);
+    if (argc == 2 && wcscmp(argv[1], L"--pmu-test") == 0) return RunMonitor(false, true, 20, true);
+    if (argc == 2 && wcscmp(argv[1], L"--pmu-inspect") == 0) return RunMonitor(false, true, 300, true);
     if (argc == 2 && wcscmp(argv[1], L"--inspect") == 0) return RunMonitor(false, true, 60);
     if (argc == 2 && wcscmp(argv[1], L"--benchmark") == 0) return RunMonitor(false, true, 20);
     if (argc == 2 && wcscmp(argv[1], L"--sensor-test") == 0) return RunMonitor(false, true);
@@ -120,7 +125,7 @@ int wmain(int argc, wchar_t* argv[])
     }
     const bool runOnce = argc == 2 && wcscmp(argv[1], L"--once") == 0;
     if (argc > 1 && !runOnce) {
-        std::printf("Usage: Cpu_freq_Moniter_v1.5.0.exe [--once | --demo | --ui-test | --sensor-test | --benchmark | --inspect]\n");
+        std::printf("Usage: Cpu_freq_Moniter_v1.7.0.exe [--once | --demo | --ui-test | --sensor-test | --benchmark | --inspect | --pmu-test | --pmu-inspect]\n");
         return 2;
     }
 
