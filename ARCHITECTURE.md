@@ -106,3 +106,14 @@ PmuSampler 使用 canonical 8 个位置：固定 instructions/cycles、可选 LL
 TmaReading 暴露原始比值，Bad Speculation 明确未验证；Frontend/Core 的负余数显示 N/A。Memory Bound 实验性；L1/L2/L3/DRAM 没有采集，UI 保留 N/A 行。独立 GDI 浮窗按实际文字和字体测量宽度与行高，与主窗 DPI/置顶/透明度设置衔接，位置独立。进阶模式序列化为 ViewMode=2，兼容旧 Detailed 键。
 
 精简模式循环物理核心，将标签与第一份有效 sibling 频率垂直居中于原来的整颗核心行组，P 核条组采用设置的精简条高加 5 个实际像素，并限制在已有核心行组内，SMT 两条贴合且居中，保留各线程的 IPC。大字体 TMA 面板可滚轮访问超出屏幕的行。很小预设精确采用 250 DIP / 9 DIP / 6 DIP / 1 Hz 等用户参数。
+
+
+## v1.8.0 Memory Bound
+
+canonical 扩展到 12 个位置，增加 load-bound、L1/L2/L3 miss stall cycles。单会话两组每 5 秒轮换：槽位组延续顶层 TMA；周期组固定 instructions/cycles，并提交 Slots、BoundLoads、LLC（关闭 LLC 显示时用 Retired 填充）、三个受限 stall 事件。两组均保留固定 IPC 计数；LLC 启用时均采集 MPKI。
+
+本机 HAL 的计数器分配对 restricted events 至关重要：MEMORY_ACTIVITY 只允许 PMC0–3。实测少量源或排在前面时 L1/L2 为零；填满六个 generic 位置并把三个 stall 源最后提交后四项有效。本轮仅在 Windows 10 19045 / i7-12700KF 验证，不能将这一排列认作 Windows 跨版本分配保证。诊断配置和负载证据见 scripts/research/MEMORY_BOUND_RESULTS.md。
+
+轮换先停止自有 session、关闭 consumer 并 join，然后建立新基线，绝不跨计数器组做差；轮换全程保持 product owner 锁，避免其他实例在轮换间隙取得本程序的会话。每 1 秒将同组所有有效 P LP 增量按周期加权汇总，不纳入 E LP。两个 TMA 缓存独立记时，12 秒过期；只有轮换保留缓存，关闭、配置变化和错误全部清空。IPC/MPKI 在重建基线时保留不足 2 秒的最近有效值，过期显示 N/A。轮换配置失败退回普通 IPC/LLC，并按原有 30 秒退避重试 TMA。
+
+Memory Bound 分区使用 Intel 周期公式，而顶层/Backend 分区使用 slots。无周期、计数异常超界、负的层级差分别失效，不强行归一化。L1 的 max(...,0) 是 Intel 原公式；其余负数显示 N/A。数据年龄和轮换间隔显式显示，避免误解为四项与顶层同一时刻。

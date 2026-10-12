@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder Version="1.0" Author="CpuFreq diagnostic">
+  <Profiles>
+    <SystemCollector Id="Collector" Name="CpuFreqMemoryBoundDiagnostic">
+      <BufferSize Value="128"/><Buffers Value="128"/>
+    </SystemCollector>
+    <SystemProvider Id="Provider">
+      <Keywords><Keyword Value="ProcessThread"/><Keyword Value="CSwitch"/></Keywords>
+    </SystemProvider>
+    <MicroArchitecturalConfig Id="MemConfig">
+      <ProfileSources Architecture="INTEL" Family="6" Model="151" Description="Alder Lake P memory stalls">
+        <ProfileSource Name="CFMMemV5XStallL1" Event="0x47" Unit="0x03" ExtendedBits="03000000" Interval="0x02000003" Persist="false"/>
+        <ProfileSource Name="CFMMemV5YStallL2" Event="0x47" Unit="0x05" ExtendedBits="05000000" Interval="0x02000003" Persist="false"/>
+        <ProfileSource Name="CFMMemV5ZStallL3" Event="0x47" Unit="0x09" ExtendedBits="09000000" Interval="0x02000003" Persist="false"/>
+        <ProfileSource Name="CFMMemV5ABoundLoads" Event="0xA6" Unit="0x21" ExtendedBits="05000000" Interval="0x02000003" Persist="false"/>
+      <ProfileSource Name="CFMMemV5BSlots" Event="0xA4" Unit="0x01" Interval="0x02000003" Persist="false"/>
+<ProfileSource Name="CFMMemV5CRetired" Event="0xC2" Unit="0x02" Interval="0x02000003" Persist="false"/>
+<ProfileSource Name="CFMMemV5DBackend" Event="0xA4" Unit="0x02" Interval="0x02000003" Persist="false"/></ProfileSources>
+    </MicroArchitecturalConfig>
+    <HardwareCounter Id="Counters" Strict="true">
+      <MicroArchitecturalConfigId Value="MemConfig"/><Counters><Counter Value="InstructionsRetiredFixed"/><Counter Value="UnhaltedCoreCyclesFixed"/><Counter Value="CFMMemV5ABoundLoads"/><Counter Value="CFMMemV5BSlots"/><Counter Value="CFMMemV5CRetired"/><Counter Value="CFMMemV5XStallL1"/><Counter Value="CFMMemV5YStallL2"/><Counter Value="CFMMemV5ZStallL3"/></Counters>
+      <Events><Event Value="CSwitch"/></Events>
+    </HardwareCounter>
+    <Profile Id="Pmu.Verbose.File" Name="Pmu" Description="Short PMU diagnostic" LoggingMode="File" DetailLevel="Verbose">
+      <Collectors><SystemCollectorId Value="Collector"><SystemProviderId Value="Provider"/><HardwareCounterId Value="Counters"/></SystemCollectorId></Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

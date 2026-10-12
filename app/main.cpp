@@ -125,7 +125,7 @@ int wmain(int argc, wchar_t* argv[])
     }
     const bool runOnce = argc == 2 && wcscmp(argv[1], L"--once") == 0;
     if (argc > 1 && !runOnce) {
-        std::printf("Usage: Cpu_freq_Moniter_v1.7.0.exe [--once | --demo | --ui-test | --sensor-test | --benchmark | --inspect | --pmu-test | --pmu-inspect]\n");
+        std::printf("Usage: Cpu_freq_Moniter_v1.8.0.exe [--once | --demo | --ui-test | --sensor-test | --benchmark | --inspect | --pmu-test | --pmu-inspect]\n");
         return 2;
     }
 

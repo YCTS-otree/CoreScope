@@ -1,8 +1,9 @@
 #pragma once
 #include "hardware.h"
 #include <memory>
-struct TmaReading { double retiring=-1, frontend=-1, badSpec=-1, backend=-1, core=-1, memory=-1; std::uint64_t slots=0; };
+struct TmaReading { double retiring=-1, frontend=-1, badSpec=-1, backend=-1, core=-1, memory=-1; double l1=-1,l2=-1,l3=-1,dram=-1,topAge=-1,memoryAge=-1; std::uint64_t slots=0,memoryCycles=0; };
 TmaReading CalculateTma(const std::array<std::uint64_t,5>& counts);
+TmaReading CalculateMemoryBound(const std::array<std::uint64_t,5>& counts);
 struct PmuReading { TmaReading tma; DWORD tmaError=ERROR_NOT_SUPPORTED; std::vector<double> ipc; double pCoreMpki=-1; DWORD error=ERROR_NOT_SUPPORTED; std::uint64_t events=0; };
 class PmuSampler {
 public:

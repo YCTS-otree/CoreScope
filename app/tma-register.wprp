@@ -14,6 +14,11 @@
         <ProfileSource Name="CFMTmaV1BadSpec" Event="0xA4" Unit="0x04" Interval="0x02000003" Persist="false"/>
         <ProfileSource Name="CFMTmaV1Memory" Event="0xA4" Unit="0x10" Interval="0x02000003" Persist="false"/>
         <ProfileSource Name="CFMTmaV1Backend" Event="0xA4" Unit="0x02" Interval="0x02000003" Persist="false"/>
+
+        <ProfileSource Name="CFMMemV5ABoundLoads" Event="0xA6" Unit="0x21" ExtendedBits="05000000" Interval="0x02000003" Persist="false"/>
+        <ProfileSource Name="CFMMemV5XStallL1" Event="0x47" Unit="0x03" ExtendedBits="03000000" Interval="0x02000003" Persist="false"/>
+        <ProfileSource Name="CFMMemV5YStallL2" Event="0x47" Unit="0x05" ExtendedBits="05000000" Interval="0x02000003" Persist="false"/>
+        <ProfileSource Name="CFMMemV5ZStallL3" Event="0x47" Unit="0x09" ExtendedBits="09000000" Interval="0x02000003" Persist="false"/>
       </ProfileSources>
       <ProfileSources Architecture="INTEL" Family="6" Model="154" Description="Alder Lake P-core diagnostic">
         <ProfileSource Name="CFMTmaV1Slots" Event="0xA4" Unit="0x01" Interval="0x02000003" Persist="false"/>
@@ -21,6 +26,11 @@
         <ProfileSource Name="CFMTmaV1BadSpec" Event="0xA4" Unit="0x04" Interval="0x02000003" Persist="false"/>
         <ProfileSource Name="CFMTmaV1Memory" Event="0xA4" Unit="0x10" Interval="0x02000003" Persist="false"/>
         <ProfileSource Name="CFMTmaV1Backend" Event="0xA4" Unit="0x02" Interval="0x02000003" Persist="false"/>
+
+        <ProfileSource Name="CFMMemV5ABoundLoads" Event="0xA6" Unit="0x21" ExtendedBits="05000000" Interval="0x02000003" Persist="false"/>
+        <ProfileSource Name="CFMMemV5XStallL1" Event="0x47" Unit="0x03" ExtendedBits="03000000" Interval="0x02000003" Persist="false"/>
+        <ProfileSource Name="CFMMemV5YStallL2" Event="0x47" Unit="0x05" ExtendedBits="05000000" Interval="0x02000003" Persist="false"/>
+        <ProfileSource Name="CFMMemV5ZStallL3" Event="0x47" Unit="0x09" ExtendedBits="09000000" Interval="0x02000003" Persist="false"/>
       </ProfileSources>
     </MicroArchitecturalConfig>
     <HardwareCounter Id="Counters" Strict="true">

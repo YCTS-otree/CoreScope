@@ -1,4 +1,4 @@
-# CPU Frequency Monitor 1.7.0
+# CPU Frequency Monitor 1.8.0
 
 轻量常驻 CPU / 内存性能浮窗，默认显示真正的 **Busy Time（% Processor Time）**。
 目前已验证的硬件传感器平台为 Intel Alder Lake（Family 6，Model 97h / 9Ah）；
@@ -6,7 +6,7 @@
 
 ## 运行
 
-退出旧版托盘实例，再运行 `Release/v1.7.0/Cpu_freq_Moniter_v1.7.0.exe`。
+退出旧版托盘实例，再运行 `Release/v1.8.0/Cpu_freq_Moniter_v1.8.0.exe`。
 需要管理员权限。发行包附带官方签名 PawnIO 2.2.0 安装器，
 首次使用请在管理员 PowerShell 运行 `Dependencies/PawnIO/Install-PawnIO.ps1`。
 需要使用随附包替换已有驱动时添加 `-Reinstall`；本机已完成替换安装。
@@ -51,11 +51,13 @@ TMA 本轮实机仅验证 i7-12700KF（Model 97h）的 P 核；9Ah 同族配置�
 
 进阶模式保留详细主浮窗，额外打开独立、可拖动的 P 核 TMA 面板，位置单独保存，透明度/字号/置顶跟随设置。隐藏主浮窗时同时隐藏 TMA，切换回普通模式释放 TMA 事件；关闭 TMA 面板返回详细模式。
 
-按全体 P 核同一窗口的槽位增量加权汇总，不包含 E 核，也不是特定应用的性能分析。所有百分比均以 P 核总 slots 为分母。
+按全体 P 核同一窗口的槽位增量加权汇总，不包含 E 核，也不是特定应用的性能分析。上方 TMA 百分比以 P 核总 slots 为分母；Memory 区域的 L1/L2/L3/DRAM Bound 以同一采样窗口的 P 核 unhalted thread cycles 为分母。
 - Retiring、Backend Bound 来自原始计数器；Frontend Bound 为余数估算。
 - Bad Speculation 依用户要求显示原始比值，标注未验证；曾在分支压力测试下全为零，不能把 0% 当成已确认“没有错误推测”。
 - Backend 下增加 Core Bound（Backend − Memory 的估算）与 Memory Bound（实验性事件）。负的余数显示 N/A，不强行归一化。
-- Memory 下 L1/L2/L3/DRAM 暂未采集，明确显示 N/A，不能用 LLC MPKI 换算这些层级比例。
+- Memory 下接入 L1/L2/L3/DRAM Bound：使用 EXE_ACTIVITY.BOUND_ON_LOADS 与 MEMORY_ACTIVITY.STALLS_L1D/L2/L3_MISS，按 Intel Alder Lake 公式计算。分别为 max(load-bound − L1 stalls, 0)、L1 stalls − L2 stalls、L2 stalls − L3 stalls、L3 stalls，再除以同窗口 P 核 cycles。
+- 四项表示周期中的负载停顿归因，不是缓存命中率、缺失率或 Memory Bound 内部占比；不能与上方槽位比例直接相加。
+- 计数器分两组每 5 秒轮换；每组有效窗口约 1 秒，通常每 10 秒更新一轮。面板分别显示数据年龄，缓存超过 12 秒显示 N/A。切换模式或采集错误立即清空；IPC/MPKI 继续约 1 秒采集，轮换重建基线时只保留最多 2 秒内的有效读数，过期时可能短暂显示 N/A。
 
 自定义事件首次启用需要支持扩展 PMU 注册的 WPR。本机 Windows SDK 中的 WPR 10.0.28000 已验证；系统自带 10.0.19041 的注册失败。程序优先使用已安装的 Windows Performance Toolkit WPR，再尝试系统 WPR；不会安装工具。`tma-register.wprp` 必须与 exe 同目录。注册使用本程序专属命名实例和 Persist=false，不保存 ETL，注册描述在本次开机期间保留，重启后消失。
 

@@ -92,7 +92,7 @@ bool selfTesting = false;
 int language = 0;
 bool detailed=true,advanced=false;
 TmaReading tmaReading;DWORD tmaError=ERROR_NOT_SUPPORTED;double tmaPublishedAt=0;
-int tmaX=CW_USEDEFAULT,tmaY=CW_USEDEFAULT,tmaScroll=0,tmaFullHeight=0;unsigned tmaGoodSamples=0;
+int tmaX=CW_USEDEFAULT,tmaY=CW_USEDEFAULT,tmaScroll=0,tmaFullHeight=0;unsigned tmaGoodSamples=0,tmaMemoryGoodSamples=0;
 std::wstring cpuTitle;
 struct ContentOption { const wchar_t* key; const wchar_t* en; const wchar_t* zh; bool enabled; };
 ContentOption contents[] = {
@@ -345,7 +345,7 @@ void Sample() {
         int packageAlert=packageFilter.Update(sensors.packageTemperature,dt,packageTj-15.0,packageTj-5.0);if(sensors.packageThrottled){packageAlert=2;packageFilter.level=2;packageFilter.heldSeconds=0;}
         const double duration=(MonotonicSeconds()-start)*1000;
         waitMs=static_cast<DWORD>((std::max)(1.0,static_cast<double>(interval.load())-duration));
-        {std::lock_guard<std::mutex> lock(dataMutex);rows.swap(next);hardwareReading=sensors;temperature=sensors.packageTemperature;temperatureAlerts=thermalAlerts;packageTemperatureAlert=packageAlert;pmuError=pmuReading.error;tmaReading=pmuReading.tma;tmaError=pmuReading.tmaError;tmaPublishedAt=MonotonicSeconds();if(selfTesting && pmuReading.tma.slots)++tmaGoodSamples;imcError=hardware.ImcError();sampleIoctls+=sensors.ioctlCount;if(selfTesting && sensors.readGBs>=0 && sensors.writeGBs>=0){bandwidthReadSum+=sensors.readGBs;bandwidthWriteSum+=sensors.writeGBs;bandwidthReadMax=(std::max)(bandwidthReadMax,sensors.readGBs);bandwidthWriteMax=(std::max)(bandwidthWriteMax,sensors.writeGBs);++bandwidthSamples;}if(selfTesting && pmuReading.pCoreMpki>=0 && std::all_of(pmuReading.ipc.begin(),pmuReading.ipc.end(),[](double ipc){return ipc>=0;}))++pmuGoodSamples;if(selfTesting && sampleDurations.size()<4000)sampleDurations.push_back(duration);publishedAt=MonotonicSeconds();sampleStatus=preview?L"DEMO":available==static_cast<int>(next.size())?L"Ready":L"Unavailable";}
+        {std::lock_guard<std::mutex> lock(dataMutex);rows.swap(next);hardwareReading=sensors;temperature=sensors.packageTemperature;temperatureAlerts=thermalAlerts;packageTemperatureAlert=packageAlert;pmuError=pmuReading.error;tmaReading=pmuReading.tma;tmaError=pmuReading.tmaError;tmaPublishedAt=MonotonicSeconds();if(selfTesting && pmuReading.tma.slots)++tmaGoodSamples;if(selfTesting && pmuReading.tma.memoryCycles && pmuReading.tma.l1>=0 && pmuReading.tma.l2>=0 && pmuReading.tma.l3>=0 && pmuReading.tma.dram>=0)++tmaMemoryGoodSamples;imcError=hardware.ImcError();sampleIoctls+=sensors.ioctlCount;if(selfTesting && sensors.readGBs>=0 && sensors.writeGBs>=0){bandwidthReadSum+=sensors.readGBs;bandwidthWriteSum+=sensors.writeGBs;bandwidthReadMax=(std::max)(bandwidthReadMax,sensors.readGBs);bandwidthWriteMax=(std::max)(bandwidthWriteMax,sensors.writeGBs);++bandwidthSamples;}if(selfTesting && pmuReading.pCoreMpki>=0 && std::all_of(pmuReading.ipc.begin(),pmuReading.ipc.end(),[](double ipc){return ipc>=0;}))++pmuGoodSamples;if(selfTesting && sampleDurations.size()<4000)sampleDurations.push_back(duration);publishedAt=MonotonicSeconds();sampleStatus=preview?L"DEMO":available==static_cast<int>(next.size())?L"Ready":L"Unavailable";}
         if(!samplePending.exchange(true))PostMessageW(windowHandle,SampleMessage,0,0);++tick;
     }
     if(query)PdhCloseQuery(query);
@@ -471,11 +471,12 @@ std::vector<TmaLine> TmaLines(){
  {std::lock_guard<std::mutex> lock(dataMutex);reading=tmaReading;error=tmaError;published=tmaPublishedAt;}
  if(MonotonicSeconds()-published>2)reading={};
  auto value=[](double number){wchar_t text[64]{};if(number<0 || !std::isfinite(number))return std::wstring(L"N/A");swprintf_s(text,L"%.1f%%",number);return std::wstring(text);};
- std::vector<TmaLine> lines={{L"TMA · P cores",L"",true},{Tr(L"% of all P-core slots · ~1s",L"占 P 核总槽位 · 约 1 秒"),L""},
+ auto age=[](double seconds){if(seconds<0)return std::wstring(L"N/A");wchar_t text[48]{};swprintf_s(text,L"%.1fs ago",seconds);return std::wstring(text);};
+ std::vector<TmaLine> lines={{L"TMA · P cores",L"",true},{Tr(L"% of all P-core slots · ~1s",L"占 P 核总槽位 · 约 1 秒"),age(reading.topAge)},
   {L"Retiring",value(reading.retiring)},{L"Frontend Bound *",value(reading.frontend)},{L"Bad Speculation *",value(reading.badSpec)},{L"Backend Bound",value(reading.backend)},
   {L"Backend:",L"",true},{L"  Core Bound *",value(reading.core)},{L"  Memory Bound *",value(reading.memory)},
-  {L"Memory:",L"",true},{L"  L1",L"N/A"},{L"  L2",L"N/A"},{L"  L3",L"N/A"},{L"  DRAM",L"N/A"},
-  {Tr(L"* Unvalidated / estimated",L"* 未验证 / 估算"),L""},{Tr(L"L1–DRAM: not collected",L"L1–DRAM：尚未采集"),L""}};
+  {L"Memory: (% cycles)",age(reading.memoryAge),true},{L"  L1 Bound",value(reading.l1)},{L"  L2 Bound",value(reading.l2)},{L"  L3 Bound",value(reading.l3)},{L"  DRAM Bound",value(reading.dram)},
+  {Tr(L"* Unvalidated / estimated",L"* 未验证 / 估算"),L""},{Tr(L"Counter groups rotate every 5s",L"计数器分组每 5 秒轮换"),L""}};
  if(error){lines.push_back({Tr(L"PMU unavailable: ",L"PMU 不可用：")+std::to_wstring(error),L""});}
  else lines.push_back({reading.slots?Tr(L"PMU active",L"PMU 采集中"):Tr(L"Waiting for valid counters",L"等待有效计数"),L""});
  return lines;
@@ -678,7 +679,8 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
         std::sort(paintLatencies.begin(),paintLatencies.end());if(!paintLatencies.empty())std::printf("publish_to_paint_p95=%.3fms paints=%zu\n",paintLatencies[static_cast<std::size_t>(static_cast<double>(paintLatencies.size()-1)*.95)],paintLatencies.size());
         std::printf("CPU family=%X model=%X physical=%zu logical=%zu package_temp=%.1f power=%.2f RAM_R=%.3f RAM_W=%.3f PMU_error=%lu IMC_error=%lu\n",topology.family,topology.model,topology.cores.size(),topology.logical.size(),hardwareReading.packageTemperature,hardwareReading.packageWatts,hardwareReading.readGBs,hardwareReading.writeGBs,pmuError,imcError);
         std::printf("TMA valid_samples=%u error=%lu slots=%llu Retiring=%.3f Frontend=%.3f BadSpec=%.3f Backend=%.3f Core=%.3f Memory=%.3f\n",tmaGoodSamples,tmaError,tmaReading.slots,tmaReading.retiring,tmaReading.frontend,tmaReading.badSpec,tmaReading.backend,tmaReading.core,tmaReading.memory);
-        if(testTma && tmaGoodSamples<3)result=27;
+        std::printf("Memory Bound valid_samples=%u cycles=%llu L1=%.3f L2=%.3f L3=%.3f DRAM=%.3f top_age=%.2f memory_age=%.2f\n",tmaMemoryGoodSamples,tmaReading.memoryCycles,tmaReading.l1,tmaReading.l2,tmaReading.l3,tmaReading.dram,tmaReading.topAge,tmaReading.memoryAge);
+        if(testTma && (tmaGoodSamples<3 || tmaMemoryGoodSamples<3))result=27;
         if(testPmu && pmuGoodSamples<3)result=26;std::printf("ETW valid_samples=%u\n",pmuGoodSamples);
         std::printf("ETW IPC valid=%zu/%zu LLC_MPKI_P=%.4f\n",static_cast<std::size_t>(std::count_if(rows.begin(),rows.end(),[](const Row& row){return row.ipc>=0;})),rows.size(),hardwareReading.llcMpki);
         for(std::size_t i=0;i<topology.logical.size();++i){const auto& cpu=topology.logical[i];std::printf("LP%zu group=%u number=%u physical=%u package=%u kind=%u APIC=%u hwcore=%u PMUv=%u fixed=%u width=%u\n",i,cpu.group,cpu.number,cpu.physical,cpu.package,static_cast<unsigned>(cpu.kind),cpu.apicId,cpu.hardwareCore,cpu.pmuVersion,cpu.fixedCount,cpu.fixedWidth);}

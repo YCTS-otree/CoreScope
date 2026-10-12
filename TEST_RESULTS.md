@@ -178,3 +178,18 @@
 五分钟进阶检查自动结束时 PMU_error=0，264 次有效 TMA 发布，整机 CPU 0.073%、工作集 94.74 MiB、private 95.76 MiB（不同于短时测量，未据此声明长期内存稳定性）。计数器精度、9Ah 型号和真实整机挂起恢复仍未认证；本轮未做 ETW 丢失故障注入。
 
 人工最终反馈：精简 P 核每条增加约 5 个实际像素后，用户确认“条高合适，可以打包”。TMA 的 N/A 已确认仅为尚未采集的 L1/L2/L3/DRAM，不是 Backend 下 Memory Bound 的读取失败。TMA 比例依然标注实验性；未将此反馈扩大为指标精度认证。
+
+
+# v1.8.0 L1/L2/L3/DRAM Bound（2026-10-13）
+
+- 使用现有 MSVC v145 / SDK 10.0.28000，Release x64 /W4 /WX 构建通过。没有安装或编写驱动。
+- 独立负载实测：固定 P LP0，16 KiB、512 KiB、8 MiB、128 MiB 的随机依赖链；成功 trace 1,789,216 个 PMC 记录，EventsLost=0、malformed=0，计数响应及原始证据见 scripts/research/MEMORY_BOUND_RESULTS.md。
+- 发现 HAL 分配受限事件到错误 PMC 时 L1/L2 为零；调整为六个 generic、三个受限 stall 源最后提交后有效。本机结果不能作为其他硬件或 Windows 版本的分配保证。
+- 单元检查通过：零周期、有效全零停顿、L1 原公式 max(...,0)、负层级差 N/A、异常超界；原有计数重置、暂停、非法时间及不支持平台检查继续通过。
+- 普通权限 IPC 与 TMA 均返回 1300，未输出有效比例。管理员生命周期 exit=0：TMA+IPC+LLC、普通 IPC、TMA+IPC 无 LLC，槽位及周期组中的 peer 冲突、关闭后缓存清空通过；120 次有效顶层采样，两个进阶阶段均获得四项 Memory Bound。
+- 收紧空闲零周期样本的处理：零周期不再误清空另一组 TMA 缓存；P 核真实中断/重置才使 P 核缓存失效，E 核不影响 P 核 TMA。轮换全程持有 owner，保留 12 秒 TMA / 2 秒 IPC 数据时限。
+- 最终产品 --tma-test exit=0：81 次顶层、60 次四项 Memory Bound 有效采样；结束时 L1=10.754%、L2=3.266%、L3=8.819%、DRAM=22.934%，Memory 年龄 1.56 秒，上方槽位数据年龄 7.08 秒。IPC=20/20，LLC MPKI(P)=6.5951，PMU_error=0。这是当时全体 P 核背景活动，不是精度认证。
+- 同次 20.20 秒测量：整机 CPU 0.321%、工作集 46.35 MiB、private 63.12 MiB；采样 mean 21.219ms / p95 84.254ms。轮换可能短暂重建基线；未宣称长期内存或开销保证。
+- UI 程序化回归 exit=0：模式、预设、字体、持久化、语言、P 核间隔及 TMA 浮窗显隐。已重新打开最终构建的很小预设供人工检查；本轮人工反馈尚未收到，不记作视觉验收通过。
+- 退出后 own session query=4201，释放通过。证据：build/memory-final-lifecycle.txt、memory-final-exits.txt、verify-memory-v180/benchmark.txt、memory-final-cleanup-after.txt、memory-ui-exit.txt。
+- Bad Speculation 仍遵循用户要求显示未验证原始值；E 核 TMA、Model 9Ah 和真实挂起恢复未实机认证。
