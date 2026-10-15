@@ -12,6 +12,7 @@ CoreScope original source is GPL-3.0-only. This does not change the licenses of 
 - Official binary release: https://github.com/namazso/PawnIO.Modules/releases/tag/0.2.11
 - `IntelMSR.bin` SHA-256: `D6ED85D65AB17A22F813EF98207D6D537155EE2DED5976A21CB48413C9B92E5F`
 - `IntelMCHBAR.bin` SHA-256: `3F82B832D99B4AAC37D2A20FDB7C9BAA2A3BC0488612C9019C9484EB0E8A6EAE`
+- `AMDFamily17.bin` SHA-256: `DAE74615761B78BDF064DFB3E136252DDCC6FC727D88F14738D0E5800D427A91`
 
 The application loads the unmodified, officially signed modules through the PawnIO runtime. It does not statically link the module code or compile/sign replacement modules. See upstream source for its build instructions and dependencies. Module files remain replaceable, subject to the official driver's signature validation.
 

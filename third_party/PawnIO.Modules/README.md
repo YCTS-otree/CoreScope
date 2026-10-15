@@ -1,4 +1,4 @@
-# PawnIO Intel MSR module
+# PawnIO sensor modules
 
 - Upstream: https://github.com/namazso/PawnIO.Modules
 - Release: 0.2.11
@@ -20,6 +20,16 @@ logical processor selected by the calling thread's group affinity.
 - License: GNU LGPL 2.1 or later (same COPYING).
 - The app loads the official signed module and uses only ioctl_read_qword for verified Alder Lake IMC counters.
 - Module files were extracted from the upstream release; no local module compilation or signing is performed.
+
+## AMDFamily17 module (added in 1.9.0)
+
+- Same pinned official release: 0.2.11 / release_0_2_11.zip.
+- Module: `AMDFamily17.bin`.
+- SHA-256: `DAE74615761B78BDF064DFB3E136252DDCC6FC727D88F14738D0E5800D427A91`.
+- Source: https://github.com/namazso/PawnIO.Modules/blob/0.2.11/AMDFamily17.p
+- License: LGPL-2.1-or-later (same `COPYING` and complete source archive).
+- CoreScope only calls `ioctl_read_msr` and `ioctl_read_smn`; it never invokes the module's MSR write interface. SMN index/data transactions hold the required shared `Global\Access_PCI` mutex.
+- Official release archive SHA-256: `43608CB89BC84247FEF1368A139013F7D043E17DB6D6C8DFC9B46BF0905A81F4`.
 
 ## Corresponding source
 

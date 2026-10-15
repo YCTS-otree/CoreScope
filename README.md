@@ -6,7 +6,7 @@
 
 CoreScope 将每核活动、硬件传感器与性能计数器放进可拖动的桌面浮窗。它由 CPU Frequency Monitor 演进而来，适合在日常使用和性能实验中持续观察处理器状态。
 
-当前版本：**1.8.1**。采用 C++17、Win32、Direct2D / DirectWrite，支持详细、精简和实验性的进阶模式。
+当前版本：**1.9.0**。采用 C++17、Win32、Direct2D / DirectWrite，支持详细、精简和实验性的进阶模式。
 
 ## 功能
 
@@ -23,15 +23,18 @@ CoreScope 将每核活动、硬件传感器与性能计数器放进可拖动的�
 | --- | --- |
 | 操作系统 | Windows x64；实机验证环境为 Windows 10 22H2（19045） |
 | 硬件传感器 / IPC / LLC | Intel Alder Lake，Family 6、Model 97h / 9Ah；主要实测处理器为 i7-12700KF |
+| AMD 传感器 | Zen Family 17h / 19h / 1Ah：P-state 频率、封装温度与能量差分功耗；本轮实测 Ryzen AI 9 HX 370（1Ah / 24h），其他 AMD 型号待实机验证 |
 | TMA | 实验性，目前仅 i7-12700KF 的 P 核经过实机验证；9Ah 配置尚未实机验证 |
 | 其他处理器 | 保留系统拓扑与 PDH 占用率；未支持的硬件指标显示 `N/A` |
 | 权限与驱动 | 程序要求管理员权限；硬件传感器使用官方签名的 PawnIO 驱动 |
 
-Windows 11 及其他处理器尚未完成全面验证。CoreScope 暂无 GPU、风扇、SPD 或特定进程分析功能。
+AMD 使用 Windows 物理核心 / SMT 分组，不将 Zen 5 / Zen 5c 标为 Intel P/E 核。逐核温度、RAM R/W、IPC、LLC MPKI 和 TMA 暂未适配 AMD，显示 `N/A`；精简模式温度取封装传感器。多封装 AMD 不读取仅定位 bus 0 的温度接口。无 PawnIO 或模块缺失时，AMD 频率回退到 Windows 报告值，并明确标注来源；该值可能仅反映操作系统的性能状态，不等于瞬时或有效频率。
+
+Windows 11 已完成 HX 370 的有限时长检查，其他处理器与系统组合仍需验证。CoreScope 暂无 GPU、风扇、SPD 或特定进程分析功能。
 
 ## 下载与运行
 
-1. 从 [Releases](https://github.com/YCTS-otree/CoreScope/releases) 下载 `CoreScope_v1.8.1_x64.zip`，完整解压到可写目录。
+1. 从 [Releases](https://github.com/YCTS-otree/CoreScope/releases) 下载发布包，或使用本地构建生成的 `CoreScope_v1.9.0_x64.zip`，完整解压到可写目录。
 2. 若未安装 PawnIO，在**管理员 PowerShell** 中进入解压目录并运行：
 
    ```powershell
@@ -41,7 +44,7 @@ Windows 11 及其他处理器尚未完成全面验证。CoreScope 暂无 GPU、�
    随包提供固定版本的官方 PawnIO 2.2.0 安装器；脚本先校验 SHA-256 与签名，再安装。已安装时无须重装。
 3. 退出旧版 CPU Frequency Monitor / CoreScope 托盘实例，运行 `CoreScope.exe` 并接受管理员权限提示。
 
-请将 `IntelMSR.bin`、`IntelMCHBAR.bin`、`tma-register.wprp` 与程序放在同一目录。PawnIO 为系统共享驱动，其他硬件监视工具也可能使用它。
+请将 `IntelMSR.bin`、`IntelMCHBAR.bin`、`AMDFamily17.bin`、`tma-register.wprp` 与程序放在同一目录。PawnIO 为系统共享驱动，其他硬件监视工具也可能使用它。
 
 **进阶模式的额外要求**：TMA 自定义事件注册需要支持扩展 PMU 注册的 Windows Performance Recorder。开发环境验证了 Windows SDK / Windows Performance Toolkit 的 WPR 10.0.28000；Windows 10 自带的 10.0.19041 注册失败。CoreScope 优先使用已安装的 WPT WPR，不会自动安装工具。TMA 不可用时降级显示错误，常规监控继续工作。
 
@@ -61,9 +64,9 @@ Windows 11 及其他处理器尚未完成全面验证。CoreScope 暂无 GPU、�
 | 指标 | 数据来源与含义 |
 | --- | --- |
 | Busy Time / 内核占用 | PDH Processor Time / Privileged Time；默认使用实际 Busy Time |
-| 频率 | `IA32_PERF_STATUS` 的瞬时倍频，**不是 Effective Clock** |
+| 频率 | Intel `IA32_PERF_STATUS`；AMD `C0010293` 当前硬件 P-state，1Ah 使用 FID × 5 MHz，17h / 19h 使用 FID / DFSID × 200 MHz；**不是 Effective Clock** |
 | 核心 / 封装温度 | Intel 数字温度传感器，核心温度按物理核心读取 |
-| 封装功耗 | RAPL Package Energy 差值除以实际采样时间 |
+| 封装功耗 | Intel RAPL / AMD Package Energy 差值除以实际采样时间；AMD 温度来自 SMN Tctl/Tdie，独立于功耗读取 |
 | RAM R/W | IMC 实际计数差，单位 GB/s；没有固定带宽上限或饱和度判断 |
 | IPC | ETW fixed retired instructions / unhalted core cycles，约每秒更新 |
 | LLC MPKI (P) | 同一窗口的 P 核 LLC misses / retired instructions × 1000；不含 E 核 |
@@ -76,7 +79,7 @@ Frontend Bound 和 Core Bound 包含余数估算；**Bad Speculation 尚未验�
 
 ## 从源码构建
 
-需要 Git、Visual Studio 2026 Build Tools（MSVC v145、C++ 桌面开发组件）和 Windows SDK **10.0.28000.0**。使用现有工具链，不需要额外 Python、Node.js 或包管理器。
+需要 Git、Visual Studio 2026 Build Tools（MSVC v145、C++ 桌面开发组件）和 Windows SDK。工程自动选择已安装的 Windows 10/11 SDK；本轮使用 **10.0.26100.0**，原 Intel 环境使用 10.0.28000.0。TMA 的 WPR 运行时要求不变。使用现有工具链，不需要额外 Python、Node.js 或包管理器。
 
 在 Developer PowerShell 中运行：
 
@@ -95,6 +98,8 @@ msbuild tests/hardware_tests.vcxproj /p:Configuration=Release /p:Platform=x64
 msbuild tests/pmu_tests.vcxproj /p:Configuration=Release /p:Platform=x64
 .\build\tests\hardware_tests.exe
 .\build\tests\pmu_tests.exe
+.\build\tests\hardware_tests.exe --require-sensors
+.\build\tests\hardware_tests.exe --missing-module
 .\build\x64\Release\CoreScope.exe --ui-test
 ```
 
@@ -103,7 +108,7 @@ GUI 自检和真实硬件测试需要在可交互的管理员会话运行；测�
 | 参数 | 用途 |
 | --- | --- |
 | `--help` / `--version` | 命令帮助 / 版本信息 |
-| `--once` | 旧版兼容的一次性 Intel 频率采样 |
+| `--once` | 一次性 Intel / AMD 频率采样，与 GUI 共用后端 |
 | `--demo` | 明确标注的演示浮窗，不伪造传感器 / PMU 数据 |
 | `--ui-test` | 布局、语言、显示项、配置迁移和持久化自检 |
 | `--sensor-test` | 真实硬件传感器诊断 |
@@ -111,6 +116,7 @@ GUI 自检和真实硬件测试需要在可交互的管理员会话运行；测�
 | `--pmu-test` / `--tma-test` | ETW / TMA 实机检查 |
 | `--inspect` / `--pmu-inspect` | 独立可见检查窗口，自动退出 |
 | `--advanced-inspect` / `--compact-inspect` | 进阶实机 / 精简演示检查，约 15 分钟后退出 |
+| `--compact-live-inspect` | 精简模式真实硬件检查，约 1 分钟后退出，使用独立配置 |
 
 当前验证结果与限制见 [TEST_RESULTS.md](TEST_RESULTS.md)。
 

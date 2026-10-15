@@ -25,6 +25,7 @@ DWORD NtStatusToError(NTSTATUS status)
 PawnIoClient::~PawnIoClient()
 {
     if (handle_ != nullptr) CloseHandle(handle_);
+    if (pciMutex_ != nullptr) CloseHandle(pciMutex_);
 }
 
 bool PawnIoClient::ReadFileBytes(const wchar_t* path, std::vector<std::uint8_t>& bytes, DWORD& error)
@@ -134,3 +135,18 @@ bool PawnIoClient::ReadMsr(std::uint32_t index, std::uint64_t& value, DWORD& err
 }
 
 bool PawnIoClient::ReadMmioQword(std::uint32_t offset, std::uint64_t& value, DWORD& error) const { const std::uint64_t input=offset;value=0;return Execute("ioctl_read_qword",&input,1,&value,1,error); }
+
+bool PawnIoClient::ReadSmn(std::uint32_t offset, std::uint32_t& value, DWORD& error) const {
+    value=0;
+    // Official module requires the shared Access_PCI mutant around the index/data pair.
+    if(!pciMutex_){pciMutex_=CreateMutexW(nullptr,FALSE,L"Global\\Access_PCI");
+        if(!pciMutex_ && GetLastError()==ERROR_ACCESS_DENIED)pciMutex_=OpenMutexW(SYNCHRONIZE|MUTEX_MODIFY_STATE,FALSE,L"Global\\Access_PCI");
+        if(!pciMutex_){error=GetLastError();return false;}}
+    const auto wait=WaitForSingleObject(pciMutex_,10);
+    if(wait!=WAIT_OBJECT_0 && wait!=WAIT_ABANDONED){error=wait==WAIT_TIMEOUT?ERROR_TIMEOUT:GetLastError();return false;}
+    const std::uint64_t input=offset;std::uint64_t output=0;
+    const bool success=Execute("ioctl_read_smn",&input,1,&output,1,error);
+    ReleaseMutex(pciMutex_);
+    if(success)value=static_cast<std::uint32_t>(output);
+    return success;
+}
