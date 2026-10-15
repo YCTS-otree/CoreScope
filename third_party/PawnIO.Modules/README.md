@@ -20,3 +20,11 @@ logical processor selected by the calling thread's group affinity.
 - License: GNU LGPL 2.1 or later (same COPYING).
 - The app loads the official signed module and uses only ioctl_read_qword for verified Alder Lake IMC counters.
 - Module files were extracted from the upstream release; no local module compilation or signing is performed.
+
+## Corresponding source
+
+The complete unmodified upstream 0.2.11 source is included in `source-0.2.11.tar.gz`.
+Source URL: https://codeload.github.com/namazso/PawnIO.Modules/tar.gz/refs/tags/0.2.11
+The original source notices and LGPL-2.1-or-later license remain applicable.
+
+Source archive SHA-256: `AFE6EC8B43189376107D860D9BA875A0D481DBC2A5A5E965D6232D6CE267CC4A`

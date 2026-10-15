@@ -1,129 +1,148 @@
-# CPU Frequency Monitor 1.8.0
+# CoreScope
 
-轻量常驻 CPU / 内存性能浮窗，默认显示真正的 **Busy Time（% Processor Time）**。
-目前已验证的硬件传感器平台为 Intel Alder Lake（Family 6，Model 97h / 9Ah）；
-其他平台保留系统拓扑和 PDH 占用率，尚未验证的硬件指标显示 N/A。
+**轻量常驻的 Windows CPU 与内存性能监视器。**
 
-## 运行
+[English](README.en.md) · [下载发布版](https://github.com/YCTS-otree/CoreScope/releases) · [更新记录](CHANGELOG.md) · [GPL-3.0](LICENSE)
 
-退出旧版托盘实例，再运行 `Release/v1.8.0/Cpu_freq_Moniter_v1.8.0.exe`。
-需要管理员权限。发行包附带官方签名 PawnIO 2.2.0 安装器，
-首次使用请在管理员 PowerShell 运行 `Dependencies/PawnIO/Install-PawnIO.ps1`。
-需要使用随附包替换已有驱动时添加 `-Reinstall`；本机已完成替换安装。
-PawnIO 是系统共享驱动，并非每个项目私有的驱动实例。`IntelMSR.bin`、`IntelMCHBAR.bin` 必须与 exe 放在一起。
+CoreScope 将每核活动、硬件传感器与性能计数器放进可拖动的桌面浮窗。它由 CPU Frequency Monitor 演进而来，适合在日常使用和性能实验中持续观察处理器状态。
 
-- 单实例 IPC：再次启动显示已有浮窗，新进程退出。
-- 全窗拖动、双击隐藏；托盘单击设置，右键详细/精简/进阶模式、显示/隐藏、设置、关于、退出。
-- 设置和托盘菜单支持 English / 简体中文；浮窗文本始终为 English。设置即时预览并保存在 `%LOCALAPPDATA%/CpuFreqMonitor/settings.ini`。
-- 浮窗自动适应逻辑核数、字体和 DPI，过高时滚轮查看；长 CPU 名称可以换行。
-- 升级至本版默认 4 Hz 刷新，继续使用 Busy Time，保留旧的外观及语言配置。
-  Utility 仍可手动选择，其内核段使用配套的 Privileged Utility。
+当前版本：**1.8.1**。采用 C++17、Win32、Direct2D / DirectWrite，支持详细、精简和实验性的进阶模式。
 
-## 指标与能力边界
+## 功能
 
-| 指标 | 当前实现 |
+- **核心拓扑与占用**：识别物理核心、逻辑处理器、SMT 和 Intel P/E 核；分别显示总占用与其中的内核占用。
+- **传感器**：瞬时频率、核心 / 封装温度、RAPL 封装功耗，以及实际 DRAM 读写带宽。
+- **性能计数器**：可选的每逻辑处理器 IPC、P 核 LLC MPKI，使用 Windows ETW / PMC 采集。
+- **进阶 TMA 面板**：观察 P 核 Retiring、Frontend / Backend Bound、Bad Speculation，以及 Core / Memory Bound 和 L1 / L2 / L3 / DRAM Bound。
+- **常驻浮窗**：托盘控制、置顶、透明度、字体、大小、显示项和 1–10 Hz 刷新率可调；支持 DPI 缩放与超高窗口滚动。
+- **语言**：设置与托盘支持简体中文 / English，指标浮窗使用英文。
+
+## 支持范围
+
+| 项目 | 当前范围 |
 | --- | --- |
-| 逻辑处理器 / 物理核心 / SMT sibling | Windows GetLogicalProcessorInformationEx，一次识别并缓存 |
-| P / E 类型 | 在目标逻辑核上读取 CPUID.1Ah，不跑负载、不按频率猜测 |
-| Core ID | UI 显示 Windows 枚举的物理核心序号，诊断另列 x2APIC / hardware core ID |
-| CPU 名称 / PMU 能力 | CPUID brand、family/model、每逻辑核的 PMU version / fixed counter 数量与宽度 |
-| Busy Time / 内核占用 | PDH Processor Information 的 Processor Time / Privileged Time |
-| 频率 | IA32_PERF_STATUS 瞬时倍频，不是 Effective Clock |
-| 核心温度 | 每物理核心读取 IA32_THERM_STATUS，启动时缓存 TjMax；SMT 不重复读取 |
-| Package 温度 | IA32_PACKAGE_THERM_STATUS，独立于最高核心温度 |
-| Package Power | RAPL Package Energy 差值 / QPC 实际时间，处理 32-bit 回绕 |
-| DRAM Read / Write | 官方 IntelMCHBAR 模块读取 IMC free-running counters，显示实际 GB/s；不设置带宽上限 |
-| IPC | Windows ETW / PMC fixed instructions 与 unhalted core cycles；每逻辑处理器约 1 秒更新 |
-| LLC MPKI (P) | Windows ETW LLCMisses / 同窗口 P 核 retired instructions × 1000；E 核不纳入 |
+| 操作系统 | Windows x64；实机验证环境为 Windows 10 22H2（19045） |
+| 硬件传感器 / IPC / LLC | Intel Alder Lake，Family 6、Model 97h / 9Ah；主要实测处理器为 i7-12700KF |
+| TMA | 实验性，目前仅 i7-12700KF 的 P 核经过实机验证；9Ah 配置尚未实机验证 |
+| 其他处理器 | 保留系统拓扑与 PDH 占用率；未支持的硬件指标显示 `N/A` |
+| 权限与驱动 | 程序要求管理员权限；硬件传感器使用官方签名的 PawnIO 驱动 |
 
-P 核按物理核心分组显示 SMT 线程；E 核最多 6 个物理核心一组，并列显示各核心温度。
-蓝色是总占用，深蓝色覆盖其中的内核占用，不相加。详细模式显示百分比和频率；IPC 栏可选。P 核子条贴合，间隔为 0 DIP，条高至少容纳文字。
-精简模式按物理核心显示一次 `P 0` / `E 8` 标签和一次频率，SMT 的占用条上下贴合，P 核每条比设置值增加 5 个实际像素（限于现有核心行组内），IPC 分开，保留物理核心之间的间隔和原来的每物理核心总高度。频率取同一物理核心的第一个有效 sibling 读数；不平均为虚构频率。
-标题只保留厂商和型号，例如 `Intel i7-12700KF`。
+Windows 11 及其他处理器尚未完成全面验证。CoreScope 暂无 GPU、风扇、SPD 或特定进程分析功能。
 
-没有使用 APERF 冒充 retired instructions，也没有使用 Pages/sec、缓存缺页或累计计数
-冒充 LLC MPKI / DRAM 带宽。IPC 与 P 核 LLC MPKI 使用真实 ETW 计数；没有有效数据时显示 N/A。
-在设置中勾选 IPC 或 LLC MPKI 后启动独立 ETW 会话；普通模式两项均关闭后释放；进阶模式另外启用 TMA，共用一个 ETW 会话。仅在已验证的 Intel Alder Lake Family 6 Model 97h/9Ah 启用；需要管理员性能分析权限。初始化/冲突/丢失/超时会降级并显示错误，30 秒后重试，普通 CPU/传感器采集继续。见 `ARCHITECTURE.md`。
+## 下载与运行
 
-## 进阶模式 / TMA（实验性）
+1. 从 [Releases](https://github.com/YCTS-otree/CoreScope/releases) 下载 `CoreScope_v1.8.1_x64.zip`，完整解压到可写目录。
+2. 若未安装 PawnIO，在**管理员 PowerShell** 中进入解压目录并运行：
 
-TMA 本轮实机仅验证 i7-12700KF（Model 97h）的 P 核；9Ah 同族配置尚未实机验证。
+   ```powershell
+   .\Dependencies\PawnIO\Install-PawnIO.ps1
+   ```
 
-进阶模式保留详细主浮窗，额外打开独立、可拖动的 P 核 TMA 面板，位置单独保存，透明度/字号/置顶跟随设置。隐藏主浮窗时同时隐藏 TMA，切换回普通模式释放 TMA 事件；关闭 TMA 面板返回详细模式。
+   随包提供固定版本的官方 PawnIO 2.2.0 安装器；脚本先校验 SHA-256 与签名，再安装。已安装时无须重装。
+3. 退出旧版 CPU Frequency Monitor / CoreScope 托盘实例，运行 `CoreScope.exe` 并接受管理员权限提示。
 
-按全体 P 核同一窗口的槽位增量加权汇总，不包含 E 核，也不是特定应用的性能分析。上方 TMA 百分比以 P 核总 slots 为分母；Memory 区域的 L1/L2/L3/DRAM Bound 以同一采样窗口的 P 核 unhalted thread cycles 为分母。
-- Retiring、Backend Bound 来自原始计数器；Frontend Bound 为余数估算。
-- Bad Speculation 依用户要求显示原始比值，标注未验证；曾在分支压力测试下全为零，不能把 0% 当成已确认“没有错误推测”。
-- Backend 下增加 Core Bound（Backend − Memory 的估算）与 Memory Bound（实验性事件）。负的余数显示 N/A，不强行归一化。
-- Memory 下接入 L1/L2/L3/DRAM Bound：使用 EXE_ACTIVITY.BOUND_ON_LOADS 与 MEMORY_ACTIVITY.STALLS_L1D/L2/L3_MISS，按 Intel Alder Lake 公式计算。分别为 max(load-bound − L1 stalls, 0)、L1 stalls − L2 stalls、L2 stalls − L3 stalls、L3 stalls，再除以同窗口 P 核 cycles。
-- 四项表示周期中的负载停顿归因，不是缓存命中率、缺失率或 Memory Bound 内部占比；不能与上方槽位比例直接相加。
-- 计数器分两组每 5 秒轮换；每组有效窗口约 1 秒，通常每 10 秒更新一轮。面板分别显示数据年龄，缓存超过 12 秒显示 N/A。切换模式或采集错误立即清空；IPC/MPKI 继续约 1 秒采集，轮换重建基线时只保留最多 2 秒内的有效读数，过期时可能短暂显示 N/A。
+请将 `IntelMSR.bin`、`IntelMCHBAR.bin`、`tma-register.wprp` 与程序放在同一目录。PawnIO 为系统共享驱动，其他硬件监视工具也可能使用它。
 
-自定义事件首次启用需要支持扩展 PMU 注册的 WPR。本机 Windows SDK 中的 WPR 10.0.28000 已验证；系统自带 10.0.19041 的注册失败。程序优先使用已安装的 Windows Performance Toolkit WPR，再尝试系统 WPR；不会安装工具。`tma-register.wprp` 必须与 exe 同目录。注册使用本程序专属命名实例和 Persist=false，不保存 ETL，注册描述在本次开机期间保留，重启后消失。
+**进阶模式的额外要求**：TMA 自定义事件注册需要支持扩展 PMU 注册的 Windows Performance Recorder。开发环境验证了 Windows SDK / Windows Performance Toolkit 的 WPR 10.0.28000；Windows 10 自带的 10.0.19041 注册失败。CoreScope 优先使用已安装的 WPT WPR，不会自动安装工具。TMA 不可用时降级显示错误，常规监控继续工作。
 
-TMA 与 IPC/LLC 共用原有独占 owner 与 ETW 会话；资源冲突不停止别的工具。TMA 注册/配置失败时回退普通 IPC/LLC，显示 TMA 错误并每 30 秒重试。计数下降、长间隔、丢失、数据过期均降级为 N/A。实验性范围不等于指标精度认证。
+## 使用
 
-## DRAM 带宽
+- 在浮窗任意位置拖动；双击隐藏，滚轮滚动较高的窗口。
+- 托盘单击打开设置；右键切换详细 / 精简 / 进阶模式、显示 / 隐藏，或退出。
+- **详细模式**显示每逻辑处理器占用与频率；**精简模式**按物理核心组织，保留 SMT 子条。
+- **进阶模式**打开额外的 P 核 TMA 面板；关闭该面板返回详细模式。
+- 蓝色为总占用，深蓝色为其中的内核占用，两者不相加。
+- 默认 4 Hz；IPC 与 LLC MPKI 默认关闭，可在显示内容中开启；关闭后释放相应 ETW 资源。
 
-按用户澄清，保留实际 RAM R/W 读数，删除不准确的固定 100 GB/s 上限与比例条。
-默认显示读写 GB/s 数值，不推断内存带宽饱和程度。
-关闭显示时不初始化或读取 IMC；重新启用时先建立计数基线。
-初始化最多执行一次，缓存有效 bank；按实际间隔计算低 32 位计数差，长暂停重新建基线。
+设置保存在 `%LOCALAPPDATA%\CoreScope\settings.ini`。首次运行会复制旧的 `%LOCALAPPDATA%\CpuFreqMonitor\settings.ini`；已有 CoreScope 配置优先，旧文件不会被删除或覆盖。复制失败时回退使用旧配置。
 
-## 异常颜色
+## 如何理解指标
 
-- Busy Time EMA 达 90% 为橙色、98% 为红色，仅改变 Busy 数字和条，不改变频率或整行。
-- 核心 / Package 温度距有效 TjMax 15°C / 5°C 时分别橙色 / 红色。
-- 检测到当前 Thermal Throttling 状态时温度立即红色，解除后有恢复延迟。
-- EMA 时间常数 1.5 秒，普通升级需持续 1.5 秒，恢复需持续 2 秒且跨过滞回阈值。
-- IPC / MPKI 不可用时不染异常色；没有自动断言“CPU 瓶颈”或“内存瓶颈”。
+| 指标 | 数据来源与含义 |
+| --- | --- |
+| Busy Time / 内核占用 | PDH Processor Time / Privileged Time；默认使用实际 Busy Time |
+| 频率 | `IA32_PERF_STATUS` 的瞬时倍频，**不是 Effective Clock** |
+| 核心 / 封装温度 | Intel 数字温度传感器，核心温度按物理核心读取 |
+| 封装功耗 | RAPL Package Energy 差值除以实际采样时间 |
+| RAM R/W | IMC 实际计数差，单位 GB/s；没有固定带宽上限或饱和度判断 |
+| IPC | ETW fixed retired instructions / unhalted core cycles，约每秒更新 |
+| LLC MPKI (P) | 同一窗口的 P 核 LLC misses / retired instructions × 1000；不含 E 核 |
 
-## 设置
+TMA 反映**全体 P 核的系统活动**，不属于某个应用。顶层比例以 slots 为分母；L1 / L2 / L3 / DRAM Bound 以 cycles 为分母，表示负载停顿归因，不是缓存命中率，也不是 Memory Bound 内部百分比，不能与顶层比例直接相加。
 
-| 设置 | 默认 | 范围 |
-| --- | --- | --- |
-| 不透明度 | 92% | 15–100% |
-| 宽度 | 340 DIP，内容不足时扩展 | 220–1200 DIP |
-| 行距 | 5 DIP | 0–40 DIP |
-| 标题 / 条目字号 | 19 / 13 DIP | 10–48 / 8–36 DIP |
-| 条高 | 12 DIP | 2–48 DIP |
-| 内边距 / 圆角 | 14 / 12 DIP | 4–48 / 0–40 DIP |
-| 刷新率 | 4 Hz | 1–10 Hz |
-| 置顶 | 1 | 0 / 1 |
+Frontend Bound 和 Core Bound 包含余数估算；**Bad Speculation 尚未验证**，显示 0% 不代表已经确认没有错误推测。计数器分组轮换，TMA 通常每 10 秒更新一轮，并显示数据年龄。无效、过期或不支持的数据显示 `N/A`，不会伪造读数或自动断言瓶颈。
 
-100% 缩放时 1 DIP 对应 1 像素。采样与浮窗刷新共用所选频率，实际频率受采样耗时影响。
+更多实现与指标边界见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-设置包含「常规」「显示内容」选项卡。常规可选详细/精简/进阶模式、小号/默认/很小预设；
-手动调整参数仍有效。小号/默认预设调整尺寸与字体；“很小”按用户参数设置：92%、宽 250、行距 1、标题 16、条目 9、条高 6、内边距 10、圆角 10、刷新 1 Hz、置顶开启。均不覆盖语言或内容选择。
-显示内容可分别开关 IPC、RAM R/W、LLC MPKI、频率、温度、封装功耗（详细模式）。
-IPC、LLC MPKI 默认隐藏，RAM R/W 默认显示。LLC 明确标注 P 核范围；E 核 LLC 口径尚未确认，不纳入整机估算。
+## 从源码构建
 
-## 构建和测试
+需要 Git、Visual Studio 2026 Build Tools（MSVC v145、C++ 桌面开发组件）和 Windows SDK **10.0.28000.0**。使用现有工具链，不需要额外 Python、Node.js 或包管理器。
 
-使用现有 VS 2026 Build Tools v145、Windows SDK 10.0.28000、C++17，无新增工具链。
+在 Developer PowerShell 中运行：
 
 ```powershell
-msbuild CpuFreq.sln /m /t:Rebuild /p:Configuration=Release /p:Platform=x64
-msbuild tests/hardware_tests.vcxproj /p:Configuration=Release /p:Platform=x64
-.\build\tests\hardware_tests.exe
+git clone https://github.com/YCTS-otree/CoreScope.git
+cd CoreScope
+msbuild CoreScope.sln /m /t:Rebuild /p:Configuration=Release /p:Platform=x64
 ```
 
-- `--once`：保留原有一次性频率采样入口。
-- `--demo`：明确标记的 CPU 模拟演示；不可用的 PMU 和带宽仍不伪造。
-- `--ui-test`：语言、配置、分组覆盖、字号边界、隐藏交互自检。
-- `--sensor-test`：真实传感器诊断，含 topology 和模块能力错误码。
-- `--benchmark`：3 秒预热后测量 20 秒 CPU、内存、采样墙钟耗时、发布到开始绘制延迟。
-- `--pmu-test`：独立配置启用 IPC/LLC，预热后测量 20 秒；`--pmu-inspect`：对应约 5 分钟的独立可见检查。
-- `--tma-test`：20 秒 TMA + IPC + LLC 实机测试；`--advanced-inspect`：约十五分钟进阶实机检查；`--compact-inspect`：约十五分钟精简布局 DEMO（IPC 明确为模拟值）。
-- `--inspect`：独立无托盘的 63 秒可见检查窗口，自动退出。
+产物为 `build\x64\Release\CoreScope.exe`，两个官方模块与 TMA profile 会自动复制到同目录。传感器运行时仍需要安装 PawnIO。模块与安装器按固定版本保存在 `third_party/`，构建不下载依赖、不编译或签名驱动。
 
-自检/测量输出写到 exe 旁的测试文件，使用独立窗口类与配置，不修改用户设置、不创建托盘。
-开发产物位于 `build/`，发布包含 exe、签名模块、官方 PawnIO 安装器及文档/许可证；测试结果见 `TEST_RESULTS.md`。
-当前图形捕获接口不可用，不能将程序化布局检查等同于完成截图验收。
+### 验证
 
-## 第三方组件
+```powershell
+msbuild tests/hardware_tests.vcxproj /p:Configuration=Release /p:Platform=x64
+msbuild tests/pmu_tests.vcxproj /p:Configuration=Release /p:Platform=x64
+.\build\tests\hardware_tests.exe
+.\build\tests\pmu_tests.exe
+.\build\x64\Release\CoreScope.exe --ui-test
+```
 
-PawnIO.Modules 0.2.11，LGPL-2.1-or-later，来源和哈希见
-`third_party/PawnIO.Modules/README.md`；发布目录附带许可证与来源说明。
-官方 PawnIO 安装器来源、SHA256 和重装方法见 `Dependencies/PawnIO/README.md`（源码中位于 `third_party/PawnIO.Setup/`）。
-开启 IPC/LLC 时由 Windows ETW 管理 PMU；不直接写 PMU/IMC 寄存器，不启用 unrestricted 模式，不需要 Windows 测试模式或新驱动签名。
+GUI 自检和真实硬件测试需要在可交互的管理员会话运行；测试输出写在 exe 旁，使用独立配置，不覆盖日常设置。
+
+| 参数 | 用途 |
+| --- | --- |
+| `--help` / `--version` | 命令帮助 / 版本信息 |
+| `--once` | 旧版兼容的一次性 Intel 频率采样 |
+| `--demo` | 明确标注的演示浮窗，不伪造传感器 / PMU 数据 |
+| `--ui-test` | 布局、语言、显示项、配置迁移和持久化自检 |
+| `--sensor-test` | 真实硬件传感器诊断 |
+| `--benchmark` | 3 秒预热 + 20 秒开销测量 |
+| `--pmu-test` / `--tma-test` | ETW / TMA 实机检查 |
+| `--inspect` / `--pmu-inspect` | 独立可见检查窗口，自动退出 |
+| `--advanced-inspect` / `--compact-inspect` | 进阶实机 / 精简演示检查，约 15 分钟后退出 |
+
+当前验证结果与限制见 [TEST_RESULTS.md](TEST_RESULTS.md)。
+
+### 打包
+
+构建和验证后运行：
+
+```powershell
+.\scripts\package.ps1
+```
+
+脚本从 `shared/version.h` 读取版本，并校验 exe 的版本元数据，将程序、依赖、许可、文档和校验和写入新的 `Release/v<版本>/`，生成对应 ZIP。已有发布目录不会被覆盖；历史发行包保留原名称。
+
+## 项目结构
+
+```text
+app/          Win32 界面、采样与 ETW/PMU 后端
+shared/       统一版本定义
+tests/        硬件逻辑与 PMU 回归测试
+scripts/      发布打包与独立研究工具
+third_party/  固定版本的官方组件、许可证与模块源码
+Release/      按版本分开的发行包
+```
+
+旧的 `CpuFreqMonitor` 单实例、ETW 和 WPR 内部标识有意保留，便于与旧版本互斥及恢复遗留会话。
+
+## 反馈与贡献
+
+欢迎通过 [Issues](https://github.com/YCTS-otree/CoreScope/issues) 报告问题或提交 Pull Request。硬件问题请附 CPU 型号、Windows 版本、CoreScope 版本、启用的模式及错误码；日志请先去除个人信息。新增平台需要独立确认寄存器、计数器语义和实机结果。
+
+## 许可证与致谢
+
+CoreScope 原创代码采用 **GNU General Public License v3.0 only（SPDX: GPL-3.0-only）**，全文见 [LICENSE](LICENSE)。Copyright © 2026 YCTS-otree and contributors.
+
+第三方组件保留各自许可证，不因随包分发而改为 GPL-3.0。感谢 [PawnIO](https://pawnio.eu/) 与 [PawnIO.Modules](https://github.com/namazso/PawnIO.Modules)；对应来源、许可证、校验信息与模块源码见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

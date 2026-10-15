@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include "pmu.h"
@@ -11,6 +12,7 @@
 #include <thread>
 #include <shlobj.h>
 namespace {
+// Preserve legacy owner/session and registered event names for upgrade interoperability.
 constexpr wchar_t SessionName[]=L"CpuFreqMonitor.PMU.v1";
 constexpr GUID SessionGuid={0x62c40534,0x96a8,0x4ec9,{0xb3,0x23,0x6c,0x2b,0x47,0xdf,0x8e,0x81}};
 constexpr GUID ThreadGuid={0x3d6fa8d1,0xfe05,0x11d0,{0x9d,0xda,0x00,0xc0,0x4f,0xd7,0xba,0x7c}};

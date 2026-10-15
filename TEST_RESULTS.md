@@ -193,3 +193,17 @@
 - UI 程序化回归 exit=0：模式、预设、字体、持久化、语言、P 核间隔及 TMA 浮窗显隐。已重新打开最终构建的很小预设供人工检查；本轮人工反馈尚未收到，不记作视觉验收通过。
 - 退出后 own session query=4201，释放通过。证据：build/memory-final-lifecycle.txt、memory-final-exits.txt、verify-memory-v180/benchmark.txt、memory-final-cleanup-after.txt、memory-ui-exit.txt。
 - Bad Speculation 仍遵循用户要求显示未验证原始值；E 核 TMA、Model 9Ah 和真实挂起恢复未实机认证。
+
+# v1.8.1 CoreScope 开源准备与改名（2026-10-15）
+
+- 使用既有 VS Build Tools / MSVC v145 / SDK 10.0.28000，CoreScope.sln Release x64 /W4 /WX 重建通过；硬件与 PMU 测试工程构建通过。
+- hardware_tests.exe / pmu_tests.exe 均 exit=0；覆盖原有拓扑、SMT、计数差、异常时间、TMA/Memory Bound 计算边界。
+- CoreScope.exe --version / --help 均 exit=0；Windows 文件属性 ProductName=CoreScope，FileVersion / ProductVersion=1.8.1，OriginalFilename=CoreScope.exe。
+- --ui-test exit=0：在 build 内独立临时目录验证旧配置复制、已有新配置优先和旧文件保留，并通过模式/预设/刷新/内容/持久化/中英文/P 核间隔及进阶显隐回归。
+- --sensor-test exit=0：真实 IMC、温度和功耗采集可用，RAM 开关/重新建基线检查 PASS。所有诊断仍使用独立配置。
+- --tma-test exit=0：81 次有效顶层 TMA、61 次有效四项 Memory Bound、69 次有效 IPC/LLC 采样，PMU_error=0 / IMC_error=0。最终一次 IPC 处于轮换重建基线窗口，0/20、LLC N/A；未据此宣称全程无间断。
+- 同次背景负载测量 20.19 秒，整机 CPU 0.344%，工作集 46.32 MiB、private 64.21 MiB，采样 mean 23.145ms / p95 195.087ms。这些是当时实机观察值，不是性能承诺。
+- 普通权限 pmu_tests --denied exit=0，IPC/TMA 以 1300 降级；管理员 --cleanup exit=0，退出后专属会话 query=4201（不存在），清理通过。
+- 当前与 8 个现有提交中的相关源码/文档已进行常见凭据模式检查，无命中；未读取任何私钥。官方模块 SHA-256 与固定值一致，模块源码归档包含 IntelMSR.p、IntelMCHBAR.p 和 COPYING。
+- 本轮没有可调用的桌面图形检查接口；程序化 UI 回归不等同于截图或人工视觉验收。采集算法和控件布局保持原实现，仅更名与迁移配置；其他平台与 Bad Speculation 的验证边界仍适用。
+- 诊断证据：build/x64/Release/ui-test.txt、sensor-test.txt、benchmark.txt 和 build/corescope-pmu-cleanup.txt；诊断日志、配置和中间产物不进入新发布目录。

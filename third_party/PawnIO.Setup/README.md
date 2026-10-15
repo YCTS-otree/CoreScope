@@ -18,6 +18,3 @@ It never enables unrestricted mode or changes Windows security settings.
 PawnIO is a system-wide kernel driver at the shared device `\Device\PawnIO`.
 Bundling the installer makes deployment reproducible; it does not create a
 project-private driver instance. Other applications using PawnIO share it.
-
-On this development machine, replacement with this exact package was completed:
-official uninstall exit 0, official install exit 0; PawnIO driver Running.

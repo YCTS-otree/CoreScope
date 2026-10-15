@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -152,12 +153,24 @@ void ReadPreferences() {
     savedX = static_cast<int>(GetPrivateProfileIntW(L"UI", L"X", CW_USEDEFAULT, iniPath.c_str()));
     savedY = static_cast<int>(GetPrivateProfileIntW(L"UI", L"Y", CW_USEDEFAULT, iniPath.c_str()));
 }
+// Keep old settings intact and never overwrite an existing CoreScope configuration.
+std::wstring ResolveSettingsPath(const std::wstring& local) {
+    const auto directory = local + L"\\CoreScope";
+    const auto current = directory + L"\\settings.ini";
+    const auto legacy = local + L"\\CpuFreqMonitor\\settings.ini";
+    CreateDirectoryW(directory.c_str(), nullptr);
+    if (GetFileAttributesW(current.c_str()) != INVALID_FILE_ATTRIBUTES) return current;
+    if (CopyFileW(legacy.c_str(), current.c_str(), TRUE)) return current;
+    // Another instance may have completed migration. CopyFile's fail-if-exists protects it.
+    if (GetFileAttributesW(current.c_str()) != INVALID_FILE_ATTRIBUTES) return current;
+    if (GetFileAttributesW(legacy.c_str()) != INVALID_FILE_ATTRIBUTES) return legacy;
+    return current;
+}
 void LoadSettings() {
     if (selfTesting) return;
     PWSTR local = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &local))) {
-        iniPath = std::wstring(local) + L"\\CpuFreqMonitor"; CoTaskMemFree(local);
-        CreateDirectoryW(iniPath.c_str(), nullptr); iniPath += L"\\settings.ini";
+        iniPath = ResolveSettingsPath(local); CoTaskMemFree(local);
     }
     ReadPreferences();
 }
@@ -362,7 +375,7 @@ HICON CreateTrayIcon() {
 }
 void Tray(DWORD operation) {
     if (selfTesting) return;
-    NOTIFYICONDATAW data{}; data.cbSize=sizeof(data);data.hWnd=windowHandle;data.uID=1;data.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;data.uCallbackMessage=TrayMessage;data.hIcon=trayIcon;wcscpy_s(data.szTip,L"CPU Freq Moniter " CPU_FREQ_VERSION_STRING);
+    NOTIFYICONDATAW data{}; data.cbSize=sizeof(data);data.hWnd=windowHandle;data.uID=1;data.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;data.uCallbackMessage=TrayMessage;data.hIcon=trayIcon;wcscpy_s(data.szTip,L"CoreScope " CORESCOPE_VERSION_STRING);
     Shell_NotifyIconW(operation,&data);
 }
 void ShowSettings();
@@ -385,7 +398,7 @@ void UpdateSettingsLanguage(HWND hwnd) {
     item.pszText=const_cast<wchar_t*>(Tr(L"General",L"常规"));TabCtrl_SetItem(GetDlgItem(hwnd,500),0,&item);
     item.pszText=const_cast<wchar_t*>(Tr(L"Display content",L"显示内容"));TabCtrl_SetItem(GetDlgItem(hwnd,500),1,&item);
 
-    SetWindowTextW(hwnd,Tr(L"CPU Freq Moniter - Settings",L"CPU Freq Moniter - 设置"));
+    SetWindowTextW(hwnd,Tr(L"CoreScope - Settings",L"CoreScope - 设置"));
     for(int i=0;i<OptionCount;++i) SetWindowTextW(GetDlgItem(hwnd,200+i), language ? chineseLabels[i] : options[i].label);
     SetWindowTextW(GetDlgItem(hwnd,300),Tr(L"Changes preview and save automatically.\nWidth expands when needed to fit text.",L"更改即时预览并自动保存。\n宽度不足时会自动扩展以容纳文字。"));
     SetWindowTextW(GetDlgItem(hwnd,301),Tr(L"Close",L"关闭"));
@@ -461,7 +474,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
     }
 }
 void ShowSettings() {
-    if(!settingsHandle) settingsHandle=CreateWindowExW(WS_EX_TOOLWINDOW,L"CpuFreqSettings",L"CPU Freq Moniter - Settings",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,CW_USEDEFAULT,CW_USEDEFAULT,400,520,windowHandle,nullptr,GetModuleHandleW(nullptr),nullptr);
+    if(!settingsHandle) settingsHandle=CreateWindowExW(WS_EX_TOOLWINDOW,L"CpuFreqSettings",L"CoreScope - Settings",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU,CW_USEDEFAULT,CW_USEDEFAULT,400,520,windowHandle,nullptr,GetModuleHandleW(nullptr),nullptr);
     ShowWindow(settingsHandle,SW_SHOW);SetForegroundWindow(settingsHandle);
 }
 
@@ -494,7 +507,7 @@ HFONT TmaFont(float dpi,bool title){return CreateFontW(-static_cast<int>(std::ce
 void SyncTmaWindow(){
  if(!windowHandle)return;
  if(!advanced){if(tmaHandle)ShowWindow(tmaHandle,SW_HIDE);return;}
- if(!tmaHandle){RECT main{};GetWindowRect(windowHandle,&main);tmaHandle=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_LAYERED,L"CpuFreqTma",L"CPU Freq Moniter v" CPU_FREQ_VERSION_STRING L" - TMA (P cores)",WS_POPUP,tmaX==CW_USEDEFAULT?main.right+8:tmaX,tmaY==CW_USEDEFAULT?main.top:tmaY,1,1,windowHandle,nullptr,GetModuleHandleW(nullptr),nullptr);}
+ if(!tmaHandle){RECT main{};GetWindowRect(windowHandle,&main);tmaHandle=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_LAYERED,L"CpuFreqTma",L"CoreScope v" CORESCOPE_VERSION_STRING L" - TMA (P cores)",WS_POPUP,tmaX==CW_USEDEFAULT?main.right+8:tmaX,tmaY==CW_USEDEFAULT?main.top:tmaY,1,1,windowHandle,nullptr,GetModuleHandleW(nullptr),nullptr);}
  if(!tmaHandle)return;
  const float dpi=static_cast<float>(GetDpiForWindow(tmaHandle))/96;HDC dc=GetDC(tmaHandle);HFONT font=TmaFont(dpi,false),bold=TmaFont(dpi,true);HGDIOBJ old=SelectObject(dc,font);const auto metrics=MeasureTma(dc,font,bold,TmaLines(),dpi);SelectObject(dc,old);DeleteObject(font);DeleteObject(bold);ReleaseDC(tmaHandle,dc);
  RECT current{};GetWindowRect(tmaHandle,&current);MONITORINFO monitor{sizeof(monitor)};GetMonitorInfoW(MonitorFromWindow(tmaHandle,MONITOR_DEFAULTTONEAREST),&monitor);
@@ -549,7 +562,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
             POINT p{};GetCursorPos(&p);SetForegroundWindow(hwnd);const UINT command=static_cast<UINT>(TrackPopupMenu(menu,TPM_RETURNCMD|TPM_RIGHTBUTTON,p.x,p.y,0,hwnd,nullptr));DestroyMenu(menu);PostMessageW(hwnd,WM_NULL,0,0);
             if(command==1){ShowWindow(hwnd,IsWindowVisible(hwnd)?SW_HIDE:SW_SHOWNOACTIVATE);SyncTmaWindow();}
             if(command==2) ShowSettings();
-            if(command==3) MessageBoxW(hwnd,Tr(L"CPU Freq Moniter " CPU_FREQ_VERSION_STRING L"\nIntel frequency via PawnIO\nTemperature: core and package sensors\nBlue = total; dark blue = kernel portion\nDrag anywhere; double-click to hide.\nMouse wheel scrolls tall overlays.",L"CPU Freq Moniter " CPU_FREQ_VERSION_STRING L"\n通过 PawnIO 读取 Intel 频率\n温度：核心与封装传感器\n蓝色表示总占用，深蓝色表示其中的内核占用\n任意位置拖动；双击隐藏。\n超高浮窗可用滚轮查看。"),Tr(L"About",L"关于"),MB_OK);
+            if(command==3) MessageBoxW(hwnd,Tr(L"CoreScope " CORESCOPE_VERSION_STRING L"\nCPU and memory performance monitor\nFrequency, temperature, power, bandwidth, IPC and TMA\nGPL-3.0-only | github.com/YCTS-otree/CoreScope\nDrag anywhere; double-click to hide.\nMouse wheel scrolls tall overlays.",L"CoreScope " CORESCOPE_VERSION_STRING L"\nCPU 与内存性能监视器\n频率、温度、功耗、带宽、IPC 和 TMA\nGPL-3.0-only | github.com/YCTS-otree/CoreScope\n任意位置拖动；双击隐藏。\n超高浮窗可用滚轮查看。"),Tr(L"About",L"关于"),MB_OK);
             if(command==4) DestroyWindow(hwnd);
             if(command==5 || command==6 || command==7){advanced=command==7;detailed=command!=6;Layout();if(settingsHandle)UpdateSettingsLanguage(settingsHandle);if(!selfTesting)SaveSettings();}
         }return 0;
@@ -562,18 +575,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
 int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTma,int inspectMode) {
     preview=demo;selfTesting=selfTest;benchmarkSeconds=benchmark;
     struct InstanceGuard { HANDLE handle=nullptr; ~InstanceGuard() { if(handle) CloseHandle(handle); } } instance;
+    // Legacy IPC identities intentionally prevent duplicate old/new instances.
     activateMessage=RegisterWindowMessageW(L"CpuFreqMonitor.Activate.v1");
     if(!selfTest) {
         instance.handle=CreateMutexW(nullptr,FALSE,L"Local\\CpuFreqMonitor.SingleInstance.v1");
         const DWORD mutexError=GetLastError();
-        if(!instance.handle) { MessageBoxW(nullptr,L"Cannot establish the single-instance lock.",L"CPU Freq Moniter",MB_ICONERROR); return 1; }
+        if(!instance.handle) { MessageBoxW(nullptr,L"Cannot establish the single-instance lock.",L"CoreScope",MB_ICONERROR); return 1; }
         if(mutexError==ERROR_ALREADY_EXISTS) {
             for(int attempt=0;attempt<50;++attempt) {
                 HWND existing=FindWindowW(L"CpuFreqOverlay",nullptr);
                 if(existing) { DWORD process=0;GetWindowThreadProcessId(existing,&process);AllowSetForegroundWindow(process);PostMessageW(existing,activateMessage,0,0);return 0; }
                 Sleep(100);
             }
-            MessageBoxW(nullptr,L"The monitor is already starting. Please try again shortly.",L"CPU Freq Moniter",MB_OK);
+            MessageBoxW(nullptr,L"The monitor is already starting. Please try again shortly.",L"CoreScope",MB_OK);
             return 0;
         }
     } else {
@@ -587,15 +601,15 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
     INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_TAB_CLASSES};InitCommonControlsEx(&controls);
     if(FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED,&factory)) || FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED,__uuidof(IDWriteFactory),reinterpret_cast<IUnknown**>(&textFactory)))) return 1;
     topology=DetectTopology();cpuTitle=ShortCpuName(topology.name);BuildDisplayGroups();for(const auto& cpu:topology.logical)rows.push_back({cpu.group,cpu.number});
-    if(rows.empty()){MessageBoxW(nullptr,L"Cannot obtain reliable CPU topology.",L"CPU Freq Moniter",MB_ICONERROR);return 1;}
+    if(rows.empty()){MessageBoxW(nullptr,L"Cannot obtain reliable CPU topology.",L"CoreScope",MB_ICONERROR);return 1;}
     processorCount = rows.size();
     LoadSettings();if(testTma)advanced=detailed=true;if(inspectMode==1){detailed=advanced=false;}if(inspectMode>=0)ApplyPreset(2);if(inspectMode==1)contents[0].enabled=true;if(testPmu){contents[0].enabled=true;contents[2].enabled=true;}stopEvent=CreateEventW(nullptr,TRUE,FALSE,nullptr);if(!stopEvent)return 1;
     WNDCLASSEXW cls{sizeof(cls)};cls.style=CS_DBLCLKS;cls.lpfnWndProc=WindowProc;cls.hInstance=GetModuleHandleW(nullptr);cls.hCursor=LoadCursorW(nullptr,IDC_ARROW);cls.lpszClassName=selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay";RegisterClassExW(&cls);
     cls.style=0;cls.lpfnWndProc=TmaProc;cls.lpszClassName=L"CpuFreqTma";RegisterClassExW(&cls);
     cls.style=0;cls.lpfnWndProc=SettingsProc;cls.lpszClassName=L"CpuFreqSettings";cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_BTNFACE+1);RegisterClassExW(&cls);
-    windowHandle=CreateWindowExW(((preview && !selfTest) || (benchmark>=60 && testPmu) || benchmark==60 ? WS_EX_APPWINDOW : WS_EX_TOOLWINDOW)|WS_EX_LAYERED,selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay",selfTest?L"CPU Freq Moniter v" CPU_FREQ_VERSION_STRING L" (test)":L"CPU Freq Moniter",WS_POPUP,inspectMode==1?900:savedX==CW_USEDEFAULT?100:savedX,savedY==CW_USEDEFAULT?100:savedY,340,200,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    windowHandle=CreateWindowExW(((preview && !selfTest) || (benchmark>=60 && testPmu) || benchmark==60 ? WS_EX_APPWINDOW : WS_EX_TOOLWINDOW)|WS_EX_LAYERED,selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay",selfTest?L"CoreScope v" CORESCOPE_VERSION_STRING L" (test)":L"CoreScope",WS_POPUP,inspectMode==1?900:savedX==CW_USEDEFAULT?100:savedX,savedY==CW_USEDEFAULT?100:savedY,340,200,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
     if(!windowHandle)return 1;
-    if(inspectMode>=0)SetWindowTextW(windowHandle,inspectMode==1?L"v" CPU_FREQ_VERSION_STRING L" Compact layout (DEMO)":L"v" CPU_FREQ_VERSION_STRING L" Advanced (LIVE)");
+    if(inspectMode>=0)SetWindowTextW(windowHandle,inspectMode==1?L"v" CORESCOPE_VERSION_STRING L" Compact layout (DEMO)":L"v" CORESCOPE_VERSION_STRING L" Advanced (LIVE)");
     scale=static_cast<float>(GetDpiForWindow(windowHandle))/96;Layout();trayIcon=CreateTrayIcon();taskbarCreated=RegisterWindowMessageW(L"TaskbarCreated");ChangeWindowMessageFilterEx(windowHandle,taskbarCreated,MSGFLT_ALLOW,nullptr);ChangeWindowMessageFilterEx(windowHandle,activateMessage,MSGFLT_ALLOW,nullptr);Tray(NIM_ADD);
     ShowWindow(windowHandle,SW_SHOWNOACTIVATE);SyncTmaWindow();
     std::thread worker(Sample);
@@ -608,6 +622,20 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
             KillTimer(windowHandle,99);
             if(!memoryLifecyclePassed.load())result=24;
             if(benchmark) {DestroyWindow(windowHandle);continue;}
+            const auto migrationRoot = iniPath + L".migration-" + Number(static_cast<int>(GetCurrentProcessId()));
+            const auto oldDirectory = migrationRoot + L"\\CpuFreqMonitor";
+            const auto oldSettings = oldDirectory + L"\\settings.ini";
+            const auto newDirectory = migrationRoot + L"\\CoreScope";
+            const auto newSettings = newDirectory + L"\\settings.ini";
+            CreateDirectoryW(migrationRoot.c_str(), nullptr);
+            CreateDirectoryW(oldDirectory.c_str(), nullptr);
+            const bool wroteLegacy = WritePrivateProfileStringW(L"UI", L"Width", L"417", oldSettings.c_str()) != FALSE;
+            if (!wroteLegacy || ResolveSettingsPath(migrationRoot) != newSettings || GetPrivateProfileIntW(L"UI", L"Width", 0, newSettings.c_str()) != 417) result=32;
+            WritePrivateProfileStringW(L"UI", L"Width", L"518", newSettings.c_str());
+            if (ResolveSettingsPath(migrationRoot) != newSettings || GetPrivateProfileIntW(L"UI", L"Width", 0, newSettings.c_str()) != 518 || GetPrivateProfileIntW(L"UI", L"Width", 0, oldSettings.c_str()) != 417) result=33;
+            DeleteFileW(newSettings.c_str()); DeleteFileW(oldSettings.c_str());
+            RemoveDirectoryW(newDirectory.c_str()); RemoveDirectoryW(oldDirectory.c_str()); RemoveDirectoryW(migrationRoot.c_str());
+            std::printf("CoreScope settings migration / existing configuration precedence exit=%d\n", result);
             ShowSettings();
             SendDlgItemMessageW(settingsHandle,303,CB_SETCURSEL,1,0);
             SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(303,CBN_SELCHANGE),0);

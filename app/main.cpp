@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -12,6 +13,7 @@
 
 #include "pawnio_client.h"
 #include "monitor.h"
+#include "../shared/version.h"
 
 namespace {
 constexpr DWORD SAMPLE_INTERVAL_MS = 1000;
@@ -112,6 +114,9 @@ std::vector<ProcessorLocation> EnumerateProcessors()
 
 int wmain(int argc, wchar_t* argv[])
 {
+    if (argc == 2 && wcscmp(argv[1], L"--version") == 0) {
+        std::puts("CoreScope " CORESCOPE_VERSION_STRING); return 0;
+    }
     if(argc==2 && wcscmp(argv[1],L"--tma-test")==0)return RunMonitor(false,true,20,true,true);
     if(argc==2 && wcscmp(argv[1],L"--advanced-inspect")==0)return RunMonitor(false,true,900,true,true,2);
     if(argc==2 && wcscmp(argv[1],L"--compact-inspect")==0)return RunMonitor(true,true,900,true,false,1);
@@ -125,8 +130,8 @@ int wmain(int argc, wchar_t* argv[])
     }
     const bool runOnce = argc == 2 && wcscmp(argv[1], L"--once") == 0;
     if (argc > 1 && !runOnce) {
-        std::printf("Usage: Cpu_freq_Moniter_v1.8.0.exe [--once | --demo | --ui-test | --sensor-test | --benchmark | --inspect | --pmu-test | --pmu-inspect]\n");
-        return 2;
+        std::printf("CoreScope " CORESCOPE_VERSION_STRING "\nUsage: CoreScope.exe [--version | --help | --once | --demo | --ui-test | --sensor-test | --benchmark | --inspect | --pmu-test | --pmu-inspect | --tma-test | --advanced-inspect | --compact-inspect]\n");
+        return argc == 2 && wcscmp(argv[1], L"--help") == 0 ? 0 : 2;
     }
 
     std::uint32_t busFrequencyMHz = 0;
