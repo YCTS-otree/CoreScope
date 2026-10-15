@@ -23,6 +23,7 @@ $required = @(
     'README.md', 'README.en.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
     'CHANGELOG.md', 'ARCHITECTURE.md', 'TEST_RESULTS.md', 'app/tma-register.wprp',
     'third_party/PawnIO.Modules/IntelMSR.bin', 'third_party/PawnIO.Modules/IntelMCHBAR.bin',
+    'third_party/PawnIO.Modules/AMDFamily17.bin',
     'third_party/PawnIO.Modules/COPYING', 'third_party/PawnIO.Modules/README.md',
     'third_party/PawnIO.Modules/source-0.2.11.tar.gz',
     'third_party/PawnIO.Setup/README.md', 'third_party/PawnIO.Setup/Install-PawnIO.ps1',
@@ -34,6 +35,7 @@ foreach ($relative in $required) {
     }
 }
 $pinned = @{
+    'third_party/PawnIO.Modules/AMDFamily17.bin' = 'DAE74615761B78BDF064DFB3E136252DDCC6FC727D88F14738D0E5800D427A91'
     'third_party/PawnIO.Modules/IntelMSR.bin' = 'D6ED85D65AB17A22F813EF98207D6D537155EE2DED5976A21CB48413C9B92E5F'
     'third_party/PawnIO.Modules/IntelMCHBAR.bin' = '3F82B832D99B4AAC37D2A20FDB7C9BAA2A3BC0488612C9019C9484EB0E8A6EAE'
     'third_party/PawnIO.Setup/v2.2.0/PawnIO_setup.exe' = '1F519A22E47187F70A1379A48CA604981C4FCF694F4E65B734AAA74A9FBA3032'
@@ -48,7 +50,7 @@ Copy-Item -LiteralPath $executable -Destination $destination
 foreach ($name in @('README.md','README.en.md','LICENSE','THIRD_PARTY_NOTICES.md','CHANGELOG.md','ARCHITECTURE.md','TEST_RESULTS.md')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination $destination
 }
-foreach ($name in @('IntelMSR.bin','IntelMCHBAR.bin')) {
+foreach ($name in @('IntelMSR.bin','IntelMCHBAR.bin','AMDFamily17.bin')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot "third_party/PawnIO.Modules/$name") -Destination $destination
 }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'app/tma-register.wprp') -Destination $destination

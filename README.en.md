@@ -6,7 +6,7 @@
 
 CoreScope brings per-core activity, hardware sensors and performance counters into a draggable desktop overlay. Formerly CPU Frequency Monitor, it now includes CPU and memory monitoring and experimental P-core analysis.
 
-Current version: **1.8.1**. Built with C++17, Win32, Direct2D and DirectWrite.
+Current version: **1.9.0**. Built with C++17, Win32, Direct2D and DirectWrite.
 
 ## Features
 
@@ -19,13 +19,17 @@ Current version: **1.8.1**. Built with C++17, Win32, Direct2D and DirectWrite.
 
 ## Supported platforms
 
-Hardware sensor and PMU profiles currently target **Intel Alder Lake, Family 6, Models 97h/9Ah**. The main test system is an **i7-12700KF running Windows 10 22H2 (19045)**. TMA has only been tested on that CPU's P cores; the 9Ah configuration has not been tested on hardware. Other CPUs retain OS topology and PDH utilization; unsupported sensors display `N/A`. Windows 11 has not been comprehensively validated.
+Intel sensors and PMU target **Alder Lake, Family 6, Models 97h/9Ah**, primarily tested on an **i7-12700KF running Windows 10 22H2 (19045)**. TMA has only been tested on that CPU's P cores; model 9Ah remains untested on hardware.
+
+AMD Zen **Families 17h, 19h and 1Ah** have a sensor path for hardware P-state frequency, package temperature and package energy-based power. **Ryzen AI 9 HX 370 (1Ah/24h)** has been tested on Windows 11; other AMD models remain unverified. Windows topology supplies physical cores and SMT; Zen 5/Zen 5c are not labelled Intel P/E cores. AMD per-core temperature, DRAM bandwidth, IPC, LLC MPKI and TMA remain `N/A`. Compact mode uses package temperature. The bus-0 temperature interface is disabled on multi-package AMD systems.
+
+Without PawnIO or its AMD module, frequency falls back to **Windows-reported MHz**, labelled in the overlay. This OS performance-state value may differ from instantaneous or effective clocks. Unsupported metrics remain `N/A`; other CPUs retain OS topology and PDH utilization.
 
 Administrator privileges are required. Sensor access uses the official signed PawnIO driver. GPU, fan, SPD and per-process profiling are outside the current feature set.
 
 ## Download and run
 
-1. Download `CoreScope_v1.8.1_x64.zip` from [Releases](https://github.com/YCTS-otree/CoreScope/releases) and extract the complete archive to a writable directory.
+1. Download a package from [Releases](https://github.com/YCTS-otree/CoreScope/releases), or build `CoreScope_v1.9.0_x64.zip` locally, and extract it to a writable directory.
 2. If PawnIO is not installed, run the bundled installer script from an **administrator PowerShell**:
 
    ```powershell
@@ -35,7 +39,7 @@ Administrator privileges are required. Sensor access uses the official signed Pa
    The script checks the pinned SHA-256 and Authenticode signature before running the official PawnIO 2.2.0 installer. Reinstallation is unnecessary if it is already installed.
 3. Exit any old CPU Frequency Monitor / CoreScope tray instance, then launch `CoreScope.exe` and accept the elevation prompt.
 
-Keep `IntelMSR.bin`, `IntelMCHBAR.bin` and `tma-register.wprp` beside the executable. PawnIO is a shared system driver, potentially used by other hardware tools.
+Keep `IntelMSR.bin`, `IntelMCHBAR.bin`, `AMDFamily17.bin` and `tma-register.wprp` beside the executable. PawnIO is a shared system driver, potentially used by other hardware tools.
 
 **TMA also requires a WPR version supporting extended PMU registration.** Windows Performance Toolkit WPR 10.0.28000 was tested; Windows 10's bundled 10.0.19041 failed registration. CoreScope prefers an installed WPT WPR and never installs it automatically. Registration failures degrade TMA while normal monitoring continues.
 
@@ -50,8 +54,8 @@ Settings live at `%LOCALAPPDATA%\CoreScope\settings.ini`. On first launch, the o
 ## Metric interpretation and limitations
 
 - Busy Time uses PDH Processor Time, with Privileged Time for its kernel portion.
-- Frequency uses the instantaneous `IA32_PERF_STATUS` ratio, **not Effective Clock**.
-- Package power is a RAPL energy delta divided by actual elapsed time.
+- Frequency uses Intel `IA32_PERF_STATUS` or AMD hardware P-state `C0010293`: FID × 5 MHz for family 1Ah, FID / DFSID × 200 MHz for 17h/19h. It is **not Effective Clock**.
+- Package power uses Intel RAPL or AMD package-energy deltas divided by actual elapsed time. AMD temperature uses the SMN Tctl/Tdie register, with early Zen SKU offsets where applicable.
 - RAM R/W uses actual IMC counter deltas in GB/s, without a guessed bandwidth ceiling or saturation estimate.
 - IPC uses retired instructions / unhalted core cycles. LLC MPKI uses P-core LLC misses / instructions × 1000. Both update approximately once per second; E-core LLC statistics are excluded.
 - TMA represents system activity across P cores, not one application. Top-level metrics use slots, while L1/L2/L3/DRAM Bound use cycles. Memory-stall attribution is not cache hit rate or a percentage breakdown within Memory Bound; these values cannot be added to slot percentages.
@@ -62,7 +66,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation details and [TEST_RESU
 
 ## Build from source
 
-Install Git, Visual Studio 2026 Build Tools with the **MSVC v145** C++ desktop tools, and **Windows SDK 10.0.28000.0**. No Python, Node.js or package manager is needed for the application build.
+Use Git, Visual Studio 2026 Build Tools with **MSVC v145**, and an installed Windows SDK. Projects select the installed Windows 10/11 SDK; this AMD build uses **10.0.26100.0**, while the original Intel environment uses 10.0.28000.0. TMA's WPR runtime requirement is unchanged. No Python, Node.js or package manager is needed for the application build.
 
 From Developer PowerShell:
 
@@ -74,12 +78,14 @@ msbuild tests/hardware_tests.vcxproj /p:Configuration=Release /p:Platform=x64
 msbuild tests/pmu_tests.vcxproj /p:Configuration=Release /p:Platform=x64
 .\build\tests\hardware_tests.exe
 .\build\tests\pmu_tests.exe
+.\build\tests\hardware_tests.exe --require-sensors
+.\build\tests\hardware_tests.exe --missing-module
 .\build\x64\Release\CoreScope.exe --ui-test
 ```
 
 The executable, modules and TMA profile are placed in `build\x64\Release\`. Runtime sensor access still requires PawnIO. Third-party binaries are pinned in `third_party/`; the build does not download dependencies or compile/sign a driver.
 
-GUI regression and hardware tests need an interactive administrator session. Diagnostics write beside the executable and use separate test settings. Use `--help` for supported switches: `--version`, `--once`, `--demo`, `--ui-test`, `--sensor-test`, `--benchmark`, `--pmu-test`, `--tma-test`, `--inspect`, `--pmu-inspect`, `--advanced-inspect`, and `--compact-inspect`.
+GUI regression and hardware tests need an interactive administrator session. Diagnostics write beside the executable and use separate test settings. `--once` shares the Intel/AMD sampler with the GUI. `--compact-live-inspect` opens a compact live overlay for about one minute. Other switches are listed by `--help`.
 
 After building and validating, run `.\scripts\package.ps1`. It reads `shared/version.h`, checks executable version metadata and creates `Release/v<version>/` plus a ZIP with dependencies, licenses, documentation and SHA-256 checksums. Existing release output is never overwritten.
 

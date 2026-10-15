@@ -193,6 +193,7 @@ void Layout() {
     const float padding = static_cast<float>(options[6].value);
     contentWidth = (std::max)({static_cast<float>(options[1].value), labelWidth + frequencyWidth + ipcWidth + busyWidth + 70 + 2 * padding, Measure(cpuTitle, titleFont).width + 2 * padding, Measure(L"Temperature: 100.0 \u00b0C", normalFont).width + 2 * padding});
     if(contents[0].enabled || contents[2].enabled)contentWidth=(std::max)(contentWidth,Measure(L"PMU unavailable (error 4294967295)",normalFont).width+2*padding);
+    if(topology.amd && !preview)contentWidth=(std::max)(contentWidth,Measure(L"AMD sensors unavailable (4294967295)",normalFont).width+2*padding);
     if(contents[2].enabled)contentWidth=(std::max)(contentWidth,Measure(L"LLC MPKI (P): 999999.9",normalFont).width+2*padding);
     if(detailed && contents[4].enabled)for(const auto& group:displayGroups)contentWidth=(std::max)(contentWidth,Measure(CoreKindName(group.kind),normalFont).width+40+temperatureColumnWidth*static_cast<float>(group.physical.size())+2*padding);
     rowHeight = (std::max)(textHeight, static_cast<float>(options[5].value)) + static_cast<float>(options[2].value);
@@ -214,6 +215,7 @@ void Layout() {
     if(contents[2].enabled)contentHeight+=textHeight+4;
     if(contents[0].enabled || contents[2].enabled)contentHeight+=textHeight+4;
     if(preview)contentHeight+=textHeight+4;
+    if(topology.amd && !preview){if(contents[3].enabled)contentHeight+=textHeight+4;if(contents[4].enabled || contents[5].enabled)contentHeight+=textHeight+4;}
     const int width=Px(contentWidth);
     const int height = (std::min)(Px(contentHeight), static_cast<int>(monitor.rcWork.bottom - monitor.rcWork.top));
     const int x = std::clamp(current.left, monitor.rcWork.left, monitor.rcWork.right - width);
@@ -303,7 +305,7 @@ void Paint() {
                 double ghz=-1;for(auto i:physical.siblings)if(i<snapshot.size() && snapshot[i].ghz>=0){ghz=snapshot[i].ghz;break;}
                 if(contents[3].enabled)DrawTextLine(format(ghz,L"%.1f GHz"),normalFont,freqX,textY,frequencyWidth,textHeight+2,textBrush);
             }
-            if(contents[4].enabled){double hottest=-1;int alert=0;for(std::size_t i=0;i<sensors.cores.size();++i){hottest=(std::max)(hottest,sensors.cores[i].temperature);if(i<alerts.size())alert=(std::max)(alert,alerts[i]);}const float w=Measure(L"Temperature: ",normalFont).width;DrawTextLine(L"Temperature: ",normalFont,p,y,w,textHeight+2,mutedBrush);DrawTextLine(format(hottest,L"%.1f °C"),normalFont,p+w,y,width-w,textHeight+2,color(alert));y+=textHeight+4;}
+            if(contents[4].enabled){double hottest=topology.amd?sensors.packageTemperature:-1;int alert=topology.amd?packageAlert:0;for(std::size_t i=0;i<sensors.cores.size();++i){hottest=(std::max)(hottest,sensors.cores[i].temperature);if(i<alerts.size())alert=(std::max)(alert,alerts[i]);}const float w=Measure(L"Temperature: ",normalFont).width;DrawTextLine(L"Temperature: ",normalFont,p,y,w,textHeight+2,mutedBrush);DrawTextLine(format(hottest,L"%.1f °C"),normalFont,p+w,y,width-w,textHeight+2,color(alert));y+=textHeight+4;}
         }
         // GB/s only: there is no guessed or fixed bandwidth ceiling.
         if(contents[1].enabled){DrawTextLine(L"RAM R: "+format(sensors.readGBs,L"%.1f GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;DrawTextLine(L"RAM W: "+format(sensors.writeGBs,L"%.1f GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
@@ -313,6 +315,10 @@ void Paint() {
             if(snapshotPmuError)swprintf_s(pmuStatus,L"PMU unavailable (error %lu)",snapshotPmuError);
             else wcscpy_s(pmuStatus,std::any_of(snapshot.begin(),snapshot.end(),[](const Row& row){return row.ipc>=0;})?L"PMU: active (1s updates)":L"PMU: waiting for fresh data");
             DrawTextLine(pmuStatus,normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;
+        }
+        if(topology.amd && !preview){
+            if(contents[3].enabled){const bool frequencyValid=std::any_of(sensors.frequency.begin(),sensors.frequency.end(),[](double value){return value>=0;});DrawTextLine(sensors.osFrequency?L"Frequency: Windows reported":frequencyValid?L"Frequency: hardware P-state":L"Frequency: unavailable",normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
+            if(contents[4].enabled || contents[5].enabled){const auto sensorStatus=sensors.sensorError?L"AMD sensors unavailable ("+std::to_wstring(sensors.sensorError)+L")":L"AMD sensors: PawnIO active";DrawTextLine(sensorStatus,normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
         }
         if(preview)DrawTextLine(L"DEMO - simulated CPU data",normalFont,p,y,width,textHeight+2,mutedBrush);
         if(target->EndDraw()==D2DERR_RECREATE_TARGET)DropTarget();
@@ -354,8 +360,8 @@ void Sample() {
             row.busyAlert=busyFilters[i].Update(row.time,dt,90,98);
         }
         for(std::size_t i=0;i<sensors.cores.size();++i){auto& core=sensors.cores[i];if(preview){core.temperature=52;core.tjMax=100;}thermalAlerts[i]=thermalFilters[i].Update(core.temperature,dt,static_cast<double>(core.tjMax-15),static_cast<double>(core.tjMax-5));if(core.throttled){thermalAlerts[i]=2;thermalFilters[i].level=2;thermalFilters[i].heldSeconds=0;}}
-        int packageTj=0;for(const auto& core:sensors.cores)if(core.tjMax>0)packageTj=packageTj==0?core.tjMax:(std::min)(packageTj,core.tjMax);
-        int packageAlert=packageFilter.Update(sensors.packageTemperature,dt,packageTj-15.0,packageTj-5.0);if(sensors.packageThrottled){packageAlert=2;packageFilter.level=2;packageFilter.heldSeconds=0;}
+        int packageTj=sensors.packageTjMax;for(const auto& core:sensors.cores)if(core.tjMax>0)packageTj=packageTj==0?core.tjMax:(std::min)(packageTj,core.tjMax);
+        int packageAlert=packageFilter.Update(packageTj>0?sensors.packageTemperature:-1,dt,packageTj-15.0,packageTj-5.0);if(sensors.packageThrottled){packageAlert=2;packageFilter.level=2;packageFilter.heldSeconds=0;}
         const double duration=(MonotonicSeconds()-start)*1000;
         waitMs=static_cast<DWORD>((std::max)(1.0,static_cast<double>(interval.load())-duration));
         {std::lock_guard<std::mutex> lock(dataMutex);rows.swap(next);hardwareReading=sensors;temperature=sensors.packageTemperature;temperatureAlerts=thermalAlerts;packageTemperatureAlert=packageAlert;pmuError=pmuReading.error;tmaReading=pmuReading.tma;tmaError=pmuReading.tmaError;tmaPublishedAt=MonotonicSeconds();if(selfTesting && pmuReading.tma.slots)++tmaGoodSamples;if(selfTesting && pmuReading.tma.memoryCycles && pmuReading.tma.l1>=0 && pmuReading.tma.l2>=0 && pmuReading.tma.l3>=0 && pmuReading.tma.dram>=0)++tmaMemoryGoodSamples;imcError=hardware.ImcError();sampleIoctls+=sensors.ioctlCount;if(selfTesting && sensors.readGBs>=0 && sensors.writeGBs>=0){bandwidthReadSum+=sensors.readGBs;bandwidthWriteSum+=sensors.writeGBs;bandwidthReadMax=(std::max)(bandwidthReadMax,sensors.readGBs);bandwidthWriteMax=(std::max)(bandwidthWriteMax,sensors.writeGBs);++bandwidthSamples;}if(selfTesting && pmuReading.pCoreMpki>=0 && std::all_of(pmuReading.ipc.begin(),pmuReading.ipc.end(),[](double ipc){return ipc>=0;}))++pmuGoodSamples;if(selfTesting && sampleDurations.size()<4000)sampleDurations.push_back(duration);publishedAt=MonotonicSeconds();sampleStatus=preview?L"DEMO":available==static_cast<int>(next.size())?L"Ready":L"Unavailable";}
@@ -603,13 +609,13 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
     topology=DetectTopology();cpuTitle=ShortCpuName(topology.name);BuildDisplayGroups();for(const auto& cpu:topology.logical)rows.push_back({cpu.group,cpu.number});
     if(rows.empty()){MessageBoxW(nullptr,L"Cannot obtain reliable CPU topology.",L"CoreScope",MB_ICONERROR);return 1;}
     processorCount = rows.size();
-    LoadSettings();if(testTma)advanced=detailed=true;if(inspectMode==1){detailed=advanced=false;}if(inspectMode>=0)ApplyPreset(2);if(inspectMode==1)contents[0].enabled=true;if(testPmu){contents[0].enabled=true;contents[2].enabled=true;}stopEvent=CreateEventW(nullptr,TRUE,FALSE,nullptr);if(!stopEvent)return 1;
+    LoadSettings();if(testTma)advanced=detailed=true;if(inspectMode==1 || inspectMode==3){detailed=advanced=false;}if(inspectMode>=0)ApplyPreset(2);if(inspectMode==1)contents[0].enabled=true;if(testPmu){contents[0].enabled=true;contents[2].enabled=true;}stopEvent=CreateEventW(nullptr,TRUE,FALSE,nullptr);if(!stopEvent)return 1;
     WNDCLASSEXW cls{sizeof(cls)};cls.style=CS_DBLCLKS;cls.lpfnWndProc=WindowProc;cls.hInstance=GetModuleHandleW(nullptr);cls.hCursor=LoadCursorW(nullptr,IDC_ARROW);cls.lpszClassName=selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay";RegisterClassExW(&cls);
     cls.style=0;cls.lpfnWndProc=TmaProc;cls.lpszClassName=L"CpuFreqTma";RegisterClassExW(&cls);
     cls.style=0;cls.lpfnWndProc=SettingsProc;cls.lpszClassName=L"CpuFreqSettings";cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_BTNFACE+1);RegisterClassExW(&cls);
     windowHandle=CreateWindowExW(((preview && !selfTest) || (benchmark>=60 && testPmu) || benchmark==60 ? WS_EX_APPWINDOW : WS_EX_TOOLWINDOW)|WS_EX_LAYERED,selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay",selfTest?L"CoreScope v" CORESCOPE_VERSION_STRING L" (test)":L"CoreScope",WS_POPUP,inspectMode==1?900:savedX==CW_USEDEFAULT?100:savedX,savedY==CW_USEDEFAULT?100:savedY,340,200,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
     if(!windowHandle)return 1;
-    if(inspectMode>=0)SetWindowTextW(windowHandle,inspectMode==1?L"v" CORESCOPE_VERSION_STRING L" Compact layout (DEMO)":L"v" CORESCOPE_VERSION_STRING L" Advanced (LIVE)");
+    if(inspectMode>=0)SetWindowTextW(windowHandle,inspectMode==3?L"v" CORESCOPE_VERSION_STRING L" Compact (LIVE)":inspectMode==1?L"v" CORESCOPE_VERSION_STRING L" Compact layout (DEMO)":L"v" CORESCOPE_VERSION_STRING L" Advanced (LIVE)");
     scale=static_cast<float>(GetDpiForWindow(windowHandle))/96;Layout();trayIcon=CreateTrayIcon();taskbarCreated=RegisterWindowMessageW(L"TaskbarCreated");ChangeWindowMessageFilterEx(windowHandle,taskbarCreated,MSGFLT_ALLOW,nullptr);ChangeWindowMessageFilterEx(windowHandle,activateMessage,MSGFLT_ALLOW,nullptr);Tray(NIM_ADD);
     ShowWindow(windowHandle,SW_SHOWNOACTIVATE);SyncTmaWindow();
     std::thread worker(Sample);
@@ -706,6 +712,7 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
         if(bandwidthSamples)std::printf("RAM mean R=%.3f W=%.3f max R=%.3f W=%.3f GB/s\n",bandwidthReadSum/bandwidthSamples,bandwidthWriteSum/bandwidthSamples,bandwidthReadMax,bandwidthWriteMax);
         std::sort(paintLatencies.begin(),paintLatencies.end());if(!paintLatencies.empty())std::printf("publish_to_paint_p95=%.3fms paints=%zu\n",paintLatencies[static_cast<std::size_t>(static_cast<double>(paintLatencies.size()-1)*.95)],paintLatencies.size());
         std::printf("CPU family=%X model=%X physical=%zu logical=%zu package_temp=%.1f power=%.2f RAM_R=%.3f RAM_W=%.3f PMU_error=%lu IMC_error=%lu\n",topology.family,topology.model,topology.cores.size(),topology.logical.size(),hardwareReading.packageTemperature,hardwareReading.packageWatts,hardwareReading.readGBs,hardwareReading.writeGBs,pmuError,imcError);
+        std::printf("Sensors error=%lu frequency_source=%s\n",hardwareReading.sensorError,hardwareReading.osFrequency?"Windows reported":"hardware");
         std::printf("TMA valid_samples=%u error=%lu slots=%llu Retiring=%.3f Frontend=%.3f BadSpec=%.3f Backend=%.3f Core=%.3f Memory=%.3f\n",tmaGoodSamples,tmaError,tmaReading.slots,tmaReading.retiring,tmaReading.frontend,tmaReading.badSpec,tmaReading.backend,tmaReading.core,tmaReading.memory);
         std::printf("Memory Bound valid_samples=%u cycles=%llu L1=%.3f L2=%.3f L3=%.3f DRAM=%.3f top_age=%.2f memory_age=%.2f\n",tmaMemoryGoodSamples,tmaReading.memoryCycles,tmaReading.l1,tmaReading.l2,tmaReading.l3,tmaReading.dram,tmaReading.topAge,tmaReading.memoryAge);
         if(testTma && (tmaGoodSamples<3 || tmaMemoryGoodSamples<3))result=27;

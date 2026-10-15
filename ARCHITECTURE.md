@@ -6,7 +6,7 @@
 
 # CoreScope 架构与硬件能力分析
 
-当前版本 1.8.1；以下按版本记录采集架构的演进。1.8.1 统一产品名称并迁移配置路径，保留原来的采集架构和内部会话标识。
+当前版本 1.9.0；以下按版本记录采集架构的演进。1.8.1 统一产品名称并迁移配置路径；1.9.0 在既有采样器内新增 AMD 路径，保留 Intel 后端和内部会话标识。
 
 ## 修改前的架构（1.3.0）
 
@@ -53,7 +53,7 @@ CPUID.1Ah（40h=Core/P、20h=Atom/E），而非负载或频率。未知类型保
 无法获得物理拓扑时明确启动失败，不把每个逻辑核冒充一个物理核心。
 
 UI 的 Physical Core ID 是 Windows 枚举序号，hardware core ID / x2APIC ID 另列诊断，
-两者不混淆。当前未为 AMD 添加传感器 profile；未来可在同一接口中新增后端。
+两者不混淆。AMD 传感器路径从 1.9.0 起在同一接口内提供，见文末。
 
 ### ETW / PMU 后端（v1.6.2）
 
@@ -119,3 +119,21 @@ canonical 扩展到 12 个位置，增加 load-bound、L1/L2/L3 miss stall cycle
 轮换先停止自有 session、关闭 consumer 并 join，然后建立新基线，绝不跨计数器组做差；轮换全程保持 product owner 锁，避免其他实例在轮换间隙取得本程序的会话。每 1 秒将同组所有有效 P LP 增量按周期加权汇总，不纳入 E LP。两个 TMA 缓存独立记时，12 秒过期；只有轮换保留缓存，关闭、配置变化和错误全部清空。IPC/MPKI 在重建基线时保留不足 2 秒的最近有效值，过期显示 N/A。轮换配置失败退回普通 IPC/LLC，并按原有 30 秒退避重试 TMA。
 
 Memory Bound 分区使用 Intel 周期公式，而顶层/Backend 分区使用 slots。无周期、计数异常超界、负的层级差分别失效，不强行归一化。L1 的 max(...,0) 是 Intel 原公式；其余负数显示 N/A。数据年龄和轮换间隔显式显示，避免误解为四项与顶层同一时刻。
+
+## AMD Zen 传感器（v1.9.0）
+
+- `DetectTopology` 分别识别 GenuineIntel / AuthenticAMD；按 CPUID 的基础 family 判断扩展 model 位，修复 17h/19h/1Ah 型号误判。AMD 使用 8000001Eh 的扩展 APIC/core ID，物理核心与 SMT 仍由 Windows GLPIEx 决定，Zen 5/Zen 5c 保留 Core 标签。
+- 官方签名 `AMDFamily17.bin` 固定为项目已有 PawnIO.Modules 0.2.11，随源代码、构建输出和发布包一起分发；未编译或签署新模块。只调用 MSR/SMN 读取入口，不修改 P-state、CPPC、功率限制或 PMU 控制寄存器。
+- Family 17h/19h 的 `C0010293` 使用 FID / DFSID × 200 MHz；1Ah 使用低 12 位 FID × 5 MHz。零除数、零频率及超出有效范围的读数无效。这是硬件 P-state 频率，不是 APERF 有效频率；CLI `--once` 与 GUI 共用后端，同时保留旧 Intel CLI 的频率支持范围。
+- `C0010299[12:8]` 定义能量单位，`C001029B` 低 32 位封装能量按 QPC 采样间隔取模差。首样本、长暂停或读取失败不显示功耗，各封装分别建立基线；任何封装缺失时不显示部分总量。
+- 单封装机器通过 SMN `59800h` 读取封装 Tctl/Tdie，按 RANGE_SEL/TJ_SEL 处理 49°C 调整，并处理早期 Ryzen / Threadripper 的型号温差。每次 SMN 索引/数据事务持有官方模块要求的共享 `Global\Access_PCI` mutex；超时跳过本次温度，不阻塞整个采样周期。模块仅访问 bus 0，因此多封装 AMD 不启用该温度接口。HX 370 的 100°C Tjmax 来自 AMD 官方规格，其他 SKU 不猜测告警阈值。
+- 模块或驱动不可用时，AMD 频率使用 PDH `Processor Information(group,number)\Processor Frequency`，界面明确标为 Windows reported；它可能是系统性能状态值，不可当作有效频率。仅在需要回退时收集该查询，查询随采样器释放。
+- 不将封装温度复制为逐核温度。详细模式逐核温度保持 N/A，精简模式显示封装温度。AMD RAM R/W、IPC、LLC MPKI、TMA 保持不支持，不加载 IntelMCHBAR，也不启动 Intel PMU/TMA 会话。
+
+核对来源：
+- [PawnIO.Modules 0.2.11 AMDFamily17](https://github.com/namazso/PawnIO.Modules/blob/0.2.11/AMDFamily17.p)
+- [LibreHardwareMonitor AMD 实现](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/blob/master/LibreHardwareMonitorLib/Hardware/Cpu/Amd17Cpu.cs)
+- [Linux k10temp 温度转换](https://github.com/torvalds/linux/blob/master/drivers/hwmon/k10temp.c)
+- [AMD HX 370 规格](https://www.amd.com/zh-cn/support/downloads/drivers.html/processors/ryzen/ryzen-ai-300-series/amd-ryzen-ai-9-hx-370.html)
+
+仅 HX 370 完成本轮实机验证；其他 Zen 型号和多封装硬件尚未验证。

@@ -207,3 +207,16 @@
 - 当前与 8 个现有提交中的相关源码/文档已进行常见凭据模式检查，无命中；未读取任何私钥。官方模块 SHA-256 与固定值一致，模块源码归档包含 IntelMSR.p、IntelMCHBAR.p 和 COPYING。
 - 本轮没有可调用的桌面图形检查接口；程序化 UI 回归不等同于截图或人工视觉验收。采集算法和控件布局保持原实现，仅更名与迁移配置；其他平台与 Bad Speculation 的验证边界仍适用。
 - 诊断证据：build/x64/Release/ui-test.txt、sensor-test.txt、benchmark.txt 和 build/corescope-pmu-cleanup.txt；诊断日志、配置和中间产物不进入新发布目录。
+
+## v1.9.0 AMD 适配验证（2026-10-15）
+
+- 本机：AMD Ryzen AI 9 HX 370，Family 1Ah / Model 24h，12 物理核心 / 24 逻辑处理器，Windows 11 Pro 25H2 Build 26200.9457。
+- 使用现有 VS 2026 Build Tools、MSVC v145 和 Windows SDK 10.0.26100.0；应用、hardware_tests、pmu_tests 在 /W4 /WX 下构建通过，未安装额外编译环境。
+- 按用户授权安装项目随附 PawnIO 2.2.0；安装前通过固定 SHA-256 和 namazso.eu Authenticode 验证，服务状态 RUNNING。AMDFamily17 来自上游固定版本 0.2.11 发布包；发布包哈希校验通过，模块被正式驱动成功加载。
+- 硬件回归涵盖 AMD/Intel 签名解析、17h/19h/1Ah 频率换算、零除数/无效值、温度范围/TJ_SEL/早期 SKU 温差、标题、32 位回绕、暂停重建基线、温度防抖及 12 核/24 LP 的 SMT 覆盖。PMU 数学和不支持平台回归通过。
+- 管理员真实硬件测试：24/24 线程 MSR 频率有效；连续样本温度 58.875–60°C，首个功耗样本 N/A，后续 12.575–13.531W，每轮 26 次 IOCTL。详细浮窗观察到前四核约 4.84GHz、其余八核约 3.11GHz；未将这种差异当作 P/E 类型判据。
+- 无驱动时，24/24 线程可使用 Windows 报告频率，温度/功耗 N/A；安装驱动后指定不存在的模块目录同样正确回退，sensor_error=3，无硬件 IOCTL。
+- GUI --ui-test exit=0，既有模式/字体/显示项/持久化/语言/配置迁移回归通过。使用 Computer Use 查看真实详细浮窗，标题、频率、封装读数和 SMT 行无重叠；高窗口需要滚动。本轮未将自动化滚动尝试记为视觉验收通过。
+- 60 秒真实详细浮窗：进程 CPU 1.016 秒，约单核 1.692% / 整机 0.070%；237 次样本，约 102.6 IOCTL/s，采样平均 5.413ms / p95 12.003ms，发布至绘制 p95 0.420ms。数据包含本机其他交互负载，仅为有限时长观察。
+- AMD RAM/IPC/LLC/TMA 返回不支持（50），值保持 N/A；逐核温度保持 N/A，未读取 Intel IMC。其他 AMD SKU、多封装和 Intel 实机回归本轮未验证，不能据此宣称所有 AMD 平台已验证。
+- 证据保留在被忽略的 build/amd-live-admin.txt、build/amd-missing-module-admin.txt、build/amd-detailed-benchmark.txt 和 build/x64/Release/ui-test.txt。诊断与中间产物不加入发布目录。GitHub 推送和发布留待用户登录后的下一轮。

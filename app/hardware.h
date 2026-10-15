@@ -4,6 +4,7 @@
 #include <array>
 #include <string>
 #include <vector>
+#include <pdh.h>
 
 enum class CoreKind { Unknown, Performance, Efficiency };
 struct LogicalCpu {
@@ -12,10 +13,13 @@ struct LogicalCpu {
 };
 struct PhysicalCpu { std::vector<std::size_t> siblings; CoreKind kind=CoreKind::Unknown; unsigned package=0; };
 struct CpuTopology {
-    std::wstring name=L"CPU"; bool intel=false; unsigned family=0, model=0, packages=0;
+    std::wstring name=L"CPU"; bool intel=false, amd=false; unsigned family=0, model=0, packages=0;
     std::vector<LogicalCpu> logical; std::vector<PhysicalCpu> cores;
 };
 CpuTopology DetectTopology();
+void DecodeCpuSignature(unsigned signature, unsigned& family, unsigned& model);
+double DecodeAmdFrequency(unsigned family, std::uint64_t value);
+double DecodeAmdTemperature(std::uint32_t value, const std::wstring& name);
 std::wstring ShortCpuName(std::wstring name);
 const wchar_t* CoreKindName(CoreKind kind);
 struct CoreReading { double temperature=-1; int tjMax=0; bool throttled=false; };
@@ -24,6 +28,9 @@ struct HardwareReading {
     std::vector<CoreReading> cores;
     bool packageThrottled=false;
     double packageTemperature=-1, packageWatts=-1, readGBs=-1, writeGBs=-1;
+    bool osFrequency=false;
+    int packageTjMax=0;
+    DWORD sensorError=ERROR_NOT_SUPPORTED;
     // MPKI is filled independently by PmuSampler; unavailable values stay negative.
     double llcMissRate=-1, llcReferenceRate=-1, llcMpki=-1;
     std::uint64_t ioctlCount=0;
@@ -40,19 +47,28 @@ struct AlertFilter {
 class HardwareSampler {
 public:
     explicit HardwareSampler(const CpuTopology& topology);
-    void Initialize(const std::wstring& directory, bool diagnostics=false);
+    ~HardwareSampler();
+    void Initialize(const std::wstring& directory, bool diagnostics=false, bool frequencyOnly=false);
     void Poll(HardwareReading& reading, bool memoryEnabled=true);
     bool Available() const { return msrReady_; }
     DWORD PmuError() const { return pmuError_; }
     DWORD ImcError() const { return imcError_; }
 private:
+    void InitializeAmd();
+    void PollAmd(HardwareReading& reading);
     void InitializeImc();
     std::wstring directory_;
-    bool diagnostics_=false, imcAttempted_=false;
+    bool diagnostics_=false, imcAttempted_=false, frequencyOnly_=false;
     const CpuTopology& topology_;
     PawnIoClient msr_, imc_;
     bool msrReady_=false, imcReady_=false, supported_=false;
     DWORD pmuError_=ERROR_NOT_SUPPORTED, imcError_=ERROR_NOT_SUPPORTED;
+    DWORD sensorError_=ERROR_NOT_SUPPORTED;
+    PDH_HQUERY frequencyQuery_=nullptr;
+    std::vector<PDH_HCOUNTER> frequencyCounters_;
+    std::vector<bool> frequencyAvailable_;
+    int packageTjMax_=0;
+    bool amdThermal_=false;
     unsigned busMHz_=100;
     std::vector<int> tjMax_;
     std::vector<bool> coreAvailable_;
