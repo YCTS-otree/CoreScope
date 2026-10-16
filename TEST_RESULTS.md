@@ -220,3 +220,10 @@
 - 60 秒真实详细浮窗：进程 CPU 1.016 秒，约单核 1.692% / 整机 0.070%；237 次样本，约 102.6 IOCTL/s，采样平均 5.413ms / p95 12.003ms，发布至绘制 p95 0.420ms。数据包含本机其他交互负载，仅为有限时长观察。
 - AMD RAM/IPC/LLC/TMA 返回不支持（50），值保持 N/A；逐核温度保持 N/A，未读取 Intel IMC。其他 AMD SKU、多封装和 Intel 实机回归本轮未验证，不能据此宣称所有 AMD 平台已验证。
 - 证据保留在被忽略的 build/amd-live-admin.txt、build/amd-missing-module-admin.txt、build/amd-detailed-benchmark.txt 和 build/x64/Release/ui-test.txt。诊断与中间产物不加入发布目录。GitHub 推送和发布留待用户登录后的下一轮。
+
+# v1.9.0 本机重新打包（2026-10-15）
+
+- 基于 main a38c42b 源码，使用既有 MSVC v145 与本机已安装 Windows SDK 重建 Release x64；主程序及硬件/PMU 测试工程均成功，警告视为错误。
+- hardware_tests.exe、pmu_tests.exe、CoreScope.exe --version / --ui-test / --sensor-test 均 exit=0；文件版本及产品版本均为 1.9.0。
+- 本轮机器为 Intel i7-12700KF（12 物理核心 / 20 逻辑处理器），没有重新验证 AMD 硬件，也没有截图视觉验收。
+- 日志位于 build/x64/Release/；发布包不包含诊断日志、用户配置或中间构建产物。保留打包前工作区中已有的旧发布文件删除记录。
