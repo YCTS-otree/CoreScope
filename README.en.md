@@ -6,7 +6,7 @@
 
 CoreScope brings per-core activity, hardware sensors and performance counters into a draggable desktop overlay. Formerly CPU Frequency Monitor, it now includes CPU and memory monitoring and experimental P-core analysis.
 
-Current version: **1.9.0**. Built with C++17, Win32, Direct2D and DirectWrite.
+Current version: **1.9.5**. Built with C++17, Win32, Direct2D and DirectWrite.
 
 ## Features
 
@@ -29,7 +29,7 @@ Administrator privileges are required. Sensor access uses the official signed Pa
 
 ## Download and run
 
-1. Download a package from [Releases](https://github.com/YCTS-otree/CoreScope/releases), or build `CoreScope_v1.9.0_x64.zip` locally, and extract it to a writable directory.
+1. Download a package from [Releases](https://github.com/YCTS-otree/CoreScope/releases), or build `CoreScope_v1.9.5_x64.zip` locally, and extract it to a writable directory.
 2. If PawnIO is not installed, run the bundled installer script from an **administrator PowerShell**:
 
    ```powershell
@@ -48,6 +48,12 @@ Keep `IntelMSR.bin`, `IntelMCHBAR.bin`, `AMDFamily17.bin` and `tma-register.wprp
 Drag anywhere on the overlay, double-click to hide, and scroll tall windows. Left-click the tray icon for settings; right-click to select detailed, compact or advanced mode, show/hide, or exit. Closing the advanced panel returns to detailed mode.
 
 Blue shows total utilization; dark blue is the kernel portion within that total. Refresh defaults to 4 Hz. IPC and LLC MPKI default to off; enable them in Display content. ETW resources are released when the corresponding features are disabled.
+
+Detailed mode is the startup default. Default / Small / Very small (Laptop) presets use 250 / 230 / 180 DIP widths with smaller fonts, bars and padding. The exact legacy size default migrates automatically; existing view modes and custom layouts are preserved. Core headers and their thread bars share the spacing setting.
+
+The Laptop preset stores width 180, gap -2, title/text 12/8, bar height 7, padding/radius 6, refresh 1 Hz, opacity 92%, and topmost enabled. View mode and display-content choices are preserved. Footer rows also follow row spacing.
+
+Row spacing accepts signed fractional DIP values from -40 to 40, such as `-1.5` or `0.25`, and preserves them in settings. Layout retains a minimum positive row step for extreme negative values.
 
 Settings live at `%LOCALAPPDATA%\CoreScope\settings.ini`. On first launch, the old `%LOCALAPPDATA%\CpuFreqMonitor\settings.ini` is copied if no CoreScope configuration exists. Existing CoreScope settings take precedence, and the old file is preserved. Failed copies fall back to the legacy file.
 
