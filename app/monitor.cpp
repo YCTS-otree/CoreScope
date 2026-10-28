@@ -121,7 +121,7 @@ float CoreHeaderHeight() { return (std::max)(1.0f,textHeight+RowGap()); }
 float CoreGroupGap() { return (std::max)(0.0f,rowSpacing); }
 float FooterRowHeight() { return (std::max)(1.0f,textHeight+RowGap()); }
 void ApplyPreset(int preset) {
-    const int tiny[]={92,180,-2,12,8,8,6,6,1,1};
+    const int tiny[]={92,180,-2,12,8,7,6,6,1,1};
     const int smallPreset[]={92,230,1,13,9,5,8,8};
     const int normal[]={92,250,1,14,10,6,8,8};
     if(preset==2){for(int i=0;i<OptionCount;++i)options[i].value=tiny[i];}
@@ -175,6 +175,7 @@ void ReadPreferences() {
     savedY = static_cast<int>(GetPrivateProfileIntW(L"UI", L"Y", CW_USEDEFAULT, iniPath.c_str()));
     // Upgrade the exact old default; preserve deliberately customized layouts.
     if(!advanced && options[1].value==340 && rowSpacing==5 && options[3].value==19 && options[4].value==13 && options[5].value==12 && options[6].value==14 && options[7].value==12)ApplyPreset(1);
+    if(options[1].value==180 && rowSpacing==-2 && options[3].value==12 && options[4].value==8 && options[5].value==8 && options[6].value==6 && options[7].value==6)options[5].value=7;
 }
 // Keep old settings intact and never overwrite an existing CoreScope configuration.
 std::wstring ResolveSettingsPath(const std::wstring& local) {
@@ -420,7 +421,7 @@ void UpdateSettingsLanguage(HWND hwnd) {
     int selectedPreset=3;
     if(options[1].value==230 && rowSpacing==1 && options[3].value==13 && options[4].value==9 && options[5].value==5 && options[6].value==8 && options[7].value==8)selectedPreset=0;
     if(options[1].value==250 && rowSpacing==1 && options[3].value==14 && options[4].value==10 && options[5].value==6 && options[6].value==8 && options[7].value==8)selectedPreset=1;
-    if(options[0].value==92 && options[1].value==180 && rowSpacing==-2 && options[3].value==12 && options[4].value==8 && options[5].value==8 && options[6].value==6 && options[7].value==6 && options[8].value==1 && options[9].value==1)selectedPreset=2;
+    if(options[0].value==92 && options[1].value==180 && rowSpacing==-2 && options[3].value==12 && options[4].value==8 && options[5].value==7 && options[6].value==6 && options[7].value==6 && options[8].value==1 && options[9].value==1)selectedPreset=2;
     SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selectedPreset,0);
     for(int i=0;i<ContentCount;++i){SetWindowTextW(GetDlgItem(hwnd,400+i),Tr(contents[i].en,contents[i].zh));SendDlgItemMessageW(hwnd,400+i,BM_SETCHECK,contents[i].enabled?BST_CHECKED:BST_UNCHECKED,0);}
     TCITEMW item{};item.mask=TCIF_TEXT;
@@ -754,7 +755,8 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
             std::printf("Smaller presets and legacy default/custom settings migration exit=%d\n",result);
             std::vector<bool> savedContent;for(auto& c:contents){savedContent.push_back(c.enabled);c.enabled=true;}
             ApplyPreset(2);detailed=true;Layout();const float laptopWidth=contentWidth;
-            if(std::abs(laptopWidth-180)>.01f || rowSpacing!=-2 || options[5].value!=8 || std::abs(FooterRowHeight()-(textHeight-2))>.01f)result=47;
+            if(std::abs(laptopWidth-180)>.01f || rowSpacing!=-2 || options[5].value!=7 || std::abs(FooterRowHeight()-(textHeight-2))>.01f)result=47;
+            options[5].value=8;SaveSettings();ReadPreferences();if(options[5].value!=7)result=50;
             SetWindowTextW(edits[1],L"230");if(contentWidth<=laptopWidth || std::abs(contentWidth-230)>.01f)result=48;
             UpdateSettingsLanguage(settingsHandle);wchar_t laptopLabel[64]{};SendDlgItemMessageW(settingsHandle,309,CB_GETLBTEXT,2,reinterpret_cast<LPARAM>(laptopLabel));
             if(wcscmp(laptopLabel,language?L"很小（笔记本）":L"Very small (Laptop)")!=0)result=49;
