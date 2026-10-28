@@ -6,7 +6,7 @@
 
 CoreScope 将每核活动、硬件传感器与性能计数器放进可拖动的桌面浮窗。它由 CPU Frequency Monitor 演进而来，适合在日常使用和性能实验中持续观察处理器状态。
 
-当前版本：**1.9.0**。采用 C++17、Win32、Direct2D / DirectWrite，支持详细、精简和实验性的进阶模式。
+当前版本：**1.9.1**。采用 C++17、Win32、Direct2D / DirectWrite，支持详细、精简和实验性的进阶模式。
 
 ## 功能
 
@@ -34,7 +34,7 @@ Windows 11 已完成 HX 370 的有限时长检查，其他处理器与系统组�
 
 ## 下载与运行
 
-1. 从 [Releases](https://github.com/YCTS-otree/CoreScope/releases) 下载发布包，或使用本地构建生成的 `CoreScope_v1.9.0_x64.zip`，完整解压到可写目录。
+1. 从 [Releases](https://github.com/YCTS-otree/CoreScope/releases) 下载发布包，或使用本地构建生成的 `CoreScope_v1.9.1_x64.zip`，完整解压到可写目录。
 2. 若未安装 PawnIO，在**管理员 PowerShell** 中进入解压目录并运行：
 
    ```powershell
@@ -55,6 +55,7 @@ Windows 11 已完成 HX 370 的有限时长检查，其他处理器与系统组�
 - **详细模式**显示每逻辑处理器占用与频率；**精简模式**按物理核心组织，保留 SMT 子条。
 - **进阶模式**打开额外的 P 核 TMA 面板；关闭该面板返回详细模式。
 - 蓝色为总占用，深蓝色为其中的内核占用，两者不相加。
+- 行间距支持 -40 至 40 DIP 的负数和小数（如 `-1.5`、`0.25`），保存后保留小数；极端负值下布局至少保留 1 DIP 的行步进。
 - 默认 4 Hz；IPC 与 LLC MPKI 默认关闭，可在显示内容中开启；关闭后释放相应 ETW 资源。
 
 设置保存在 `%LOCALAPPDATA%\CoreScope\settings.ini`。首次运行会复制旧的 `%LOCALAPPDATA%\CpuFreqMonitor\settings.ini`；已有 CoreScope 配置优先，旧文件不会被删除或覆盖。复制失败时回退使用旧配置。

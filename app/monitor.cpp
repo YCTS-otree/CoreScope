@@ -18,6 +18,7 @@
 #include <thread>
 #include <vector>
 #include <cstdio>
+#include <cwctype>
 #include "pawnio_client.h"
 #include "monitor.h"
 #include "hardware.h"
@@ -33,7 +34,7 @@ struct Option { const wchar_t* key; const wchar_t* label; int value, minimum, ma
 Option options[] = {
     {L"Opacity", L"Opacity (%)", 92, 15, 100},
     {L"Width", L"Window width (DIP)", 340, 220, 1200},
-    {L"Gap", L"Row spacing (DIP)", 5, 0, 40},
+    {L"Gap", L"Row spacing (DIP)", 5, -40, 40},
     {L"Title", L"Title font size (DIP)", 19, 10, 48},
     {L"Text", L"Item font size (DIP)", 13, 8, 36},
     {L"Bar", L"Bar height (DIP)", 12, 2, 48},
@@ -43,6 +44,8 @@ Option options[] = {
     {L"Topmost", L"Always on top (0 / 1)", 1, 0, 1}
 };
 constexpr int OptionCount = static_cast<int>(sizeof(options) / sizeof(options[0]));
+// Only spacing is fractional; the other options keep their integer semantics.
+float rowSpacing=5;
 HWND windowHandle = nullptr, settingsHandle = nullptr, tmaHandle=nullptr;
 void SyncTmaWindow();
 void ShowSettings();
@@ -108,8 +111,11 @@ constexpr int ContentCount=static_cast<int>(sizeof(contents)/sizeof(contents[0])
 std::atomic<bool> memoryEnabled{true};
 std::atomic<unsigned> pmuOptions{0};
 int settingsTab=0;
-float CoreRowHeight(CoreKind kind) {
-    return (std::max)(textHeight,static_cast<float>(options[5].value)) + (detailed && kind==CoreKind::Performance?0.0f:static_cast<float>(options[2].value));
+float RowGap() {
+    return (std::max)(rowSpacing,1.0f-(std::max)(textHeight,static_cast<float>(options[5].value)));
+}
+float CoreRowHeight(CoreKind) {
+    return (std::max)(textHeight,static_cast<float>(options[5].value)) + RowGap();
 }
 void ApplyPreset(int preset) {
     const int tiny[]={92,250,1,16,9,6,10,10,1,1};
@@ -117,6 +123,7 @@ void ApplyPreset(int preset) {
     const int normal[]={92,340,5,19,13,12,14,12};
     if(preset==2){for(int i=0;i<OptionCount;++i)options[i].value=tiny[i];}
     else for(int i=1;i<8;++i)options[i].value=preset==0?smallPreset[i]:normal[i];
+    rowSpacing=static_cast<float>(options[2].value);
 }
 
 std::atomic<int> usageMode{0};
@@ -128,8 +135,19 @@ template<class T> void Release(T*& object) { if (object) { object->Release(); ob
 void DropTarget() { Release(textBrush);Release(mutedBrush);Release(backgroundBrush);Release(blueBrush);Release(kernelBrush);Release(orangeBrush);Release(redBrush);Release(target); }
 int Px(float dip) { return static_cast<int>(std::ceil(dip * scale)); }
 std::wstring Number(int value) { return std::to_wstring(value); }
+std::wstring OptionText(int i) {
+    if(i!=2)return Number(options[i].value);
+    wchar_t text[64]{};swprintf_s(text,L"%.9g",static_cast<double>(rowSpacing));return text;
+}
+bool ParseSpacing(const wchar_t* text,float& value) {
+    wchar_t* end=nullptr;const double parsed=wcstod(text,&end);
+    if(end==text)return false;
+    while(iswspace(*end))++end;
+    if(*end || !std::isfinite(parsed) || parsed<options[2].minimum || parsed>options[2].maximum)return false;
+    value=static_cast<float>(parsed);return true;
+}
 void SaveSettings() {
-    for (const auto& o : options) WritePrivateProfileStringW(L"UI", o.key, Number(o.value).c_str(), iniPath.c_str());
+    for(int i=0;i<OptionCount;++i)WritePrivateProfileStringW(L"UI",options[i].key,OptionText(i).c_str(),iniPath.c_str());
     WritePrivateProfileStringW(L"UI", L"Language", language ? L"zh-CN" : L"en", iniPath.c_str());
     WritePrivateProfileStringW(L"UI", L"BusyModeV2", Number(usageMode.load()).c_str(), iniPath.c_str());
     WritePrivateProfileStringW(L"UI",L"Detailed",detailed?L"1":L"0",iniPath.c_str());
@@ -141,7 +159,7 @@ void SaveSettings() {
     WritePrivateProfileStringW(L"UI", L"Y", Number(rect.top).c_str(), iniPath.c_str());
 }
 void ReadPreferences() {
-    for (auto& o : options) o.value = std::clamp(static_cast<int>(GetPrivateProfileIntW(L"UI", o.key, o.value, iniPath.c_str())), o.minimum, o.maximum);
+    for(int i=0;i<OptionCount;++i){auto& o=options[i];if(i==2){wchar_t text[128]{};GetPrivateProfileStringW(L"UI",o.key,OptionText(i).c_str(),text,128,iniPath.c_str());ParseSpacing(text,rowSpacing);}else o.value=std::clamp(static_cast<int>(GetPrivateProfileIntW(L"UI",o.key,o.value,iniPath.c_str())),o.minimum,o.maximum);}
     detailed=GetPrivateProfileIntW(L"UI",L"Detailed",1,iniPath.c_str())!=0;
     const auto mode=GetPrivateProfileIntW(L"UI",L"ViewMode",detailed?0:1,iniPath.c_str());advanced=mode==2;detailed=mode!=1;
     tmaX=static_cast<int>(GetPrivateProfileIntW(L"UI",L"TmaX",CW_USEDEFAULT,iniPath.c_str()));tmaY=static_cast<int>(GetPrivateProfileIntW(L"UI",L"TmaY",CW_USEDEFAULT,iniPath.c_str()));
@@ -196,7 +214,7 @@ void Layout() {
     if(topology.amd && !preview)contentWidth=(std::max)(contentWidth,Measure(L"AMD sensors unavailable (4294967295)",normalFont).width+2*padding);
     if(contents[2].enabled)contentWidth=(std::max)(contentWidth,Measure(L"LLC MPKI (P): 999999.9",normalFont).width+2*padding);
     if(detailed && contents[4].enabled)for(const auto& group:displayGroups)contentWidth=(std::max)(contentWidth,Measure(CoreKindName(group.kind),normalFont).width+40+temperatureColumnWidth*static_cast<float>(group.physical.size())+2*padding);
-    rowHeight = (std::max)(textHeight, static_cast<float>(options[5].value)) + static_cast<float>(options[2].value);
+    rowHeight = (std::max)(textHeight, static_cast<float>(options[5].value)) + RowGap();
 
     RECT current{}; GetWindowRect(windowHandle, &current);
     MONITORINFO monitor{sizeof(monitor)}; GetMonitorInfoW(MonitorFromWindow(windowHandle, MONITOR_DEFAULTTONEAREST), &monitor);
@@ -254,7 +272,7 @@ void Paint() {
             const float h=(std::max)(textHeight,static_cast<float>(options[5].value)),textY=y+(h-textHeight)/2;
             if(!merged)DrawTextLine(Number(static_cast<int>(i)),normalFont,p,textY,labelWidth,textHeight+2,mutedBrush);
             const bool joined=kind==CoreKind::Performance && (detailed || merged);
-            const float barHeight=joined?h+(!detailed && !lastSibling?static_cast<float>(options[2].value):0):static_cast<float>(options[5].value);
+            const float barHeight=joined?(detailed?CoreRowHeight(kind):h+(!lastSibling?RowGap():0)):static_cast<float>(options[5].value);
             const float top=joined?y:y+(h-barHeight)/2,bottom=top+barHeight;
             if(!(merged && kind==CoreKind::Performance)){
             target->FillRectangle(D2D1::RectF(barX,top,barRight,bottom),backgroundBrush);
@@ -290,8 +308,8 @@ void Paint() {
             for(std::size_t core=0;core<topology.cores.size();++core){const auto& physical=topology.cores[core];const float startY=y;
                 for(auto i:physical.siblings)if(i<snapshot.size())drawRow(i,physical.kind,true,i==physical.siblings.back());
                 if(physical.kind==CoreKind::Performance){
-                    const float barHeight=(std::min)(static_cast<float>(options[5].value)+5.0f/scale,(y-startY-static_cast<float>(options[2].value))/static_cast<float>(physical.siblings.size())),groupHeight=barHeight*static_cast<float>(physical.siblings.size());
-                    float barY=startY+(y-startY-static_cast<float>(options[2].value)-groupHeight)/2;
+                    const float barHeight=(std::min)(static_cast<float>(options[5].value)+5.0f/scale,(y-startY-RowGap())/static_cast<float>(physical.siblings.size())),groupHeight=barHeight*static_cast<float>(physical.siblings.size());
+                    float barY=startY+(y-startY-RowGap()-groupHeight)/2;
                     for(auto i:physical.siblings)if(i<snapshot.size()){const auto& row=snapshot[i];const float bottom=barY+barHeight;
                         target->FillRectangle(D2D1::RectF(barX,barY,barRight,bottom),backgroundBrush);
                         if(row.total>=0)target->FillRectangle(D2D1::RectF(barX,barY,barX+(barRight-barX)*static_cast<float>(row.total/100),bottom),row.busyAlert?color(row.busyAlert):blueBrush);
@@ -299,7 +317,7 @@ void Paint() {
                         barY=bottom;
                     }
                 }
-                const float textY=startY+(y-startY-static_cast<float>(options[2].value)-textHeight)/2;
+                const float textY=startY+(y-startY-RowGap()-textHeight)/2;
                 const std::wstring label=(physical.kind==CoreKind::Performance?L"P ":physical.kind==CoreKind::Efficiency?L"E ":L"C ")+Number(static_cast<int>(core));
                 DrawTextLine(label,normalFont,p,textY,labelWidth,textHeight+2,mutedBrush);
                 double ghz=-1;for(auto i:physical.siblings)if(i<snapshot.size() && snapshot[i].ghz>=0){ghz=snapshot[i].ghz;break;}
@@ -395,9 +413,9 @@ void UpdateSettingsLanguage(HWND hwnd) {
     SendDlgItemMessageW(hwnd,307,CB_SETCURSEL,advanced?2:detailed?0:1,0);
     for(const auto* label:{Tr(L"Small",L"小号"),Tr(L"Default",L"默认"),Tr(L"Very small",L"很小"),Tr(L"Custom",L"自定义")})SendDlgItemMessageW(hwnd,309,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label));
     int selectedPreset=3;
-    if(options[1].value==280 && options[2].value==3 && options[3].value==16 && options[4].value==11 && options[5].value==10 && options[6].value==10 && options[7].value==10)selectedPreset=0;
-    if(options[1].value==340 && options[2].value==5 && options[3].value==19 && options[4].value==13 && options[5].value==12 && options[6].value==14 && options[7].value==12)selectedPreset=1;
-    if(options[0].value==92 && options[1].value==250 && options[2].value==1 && options[3].value==16 && options[4].value==9 && options[5].value==6 && options[6].value==10 && options[7].value==10 && options[8].value==1 && options[9].value==1)selectedPreset=2;
+    if(options[1].value==280 && rowSpacing==3 && options[3].value==16 && options[4].value==11 && options[5].value==10 && options[6].value==10 && options[7].value==10)selectedPreset=0;
+    if(options[1].value==340 && rowSpacing==5 && options[3].value==19 && options[4].value==13 && options[5].value==12 && options[6].value==14 && options[7].value==12)selectedPreset=1;
+    if(options[0].value==92 && options[1].value==250 && rowSpacing==1 && options[3].value==16 && options[4].value==9 && options[5].value==6 && options[6].value==10 && options[7].value==10 && options[8].value==1 && options[9].value==1)selectedPreset=2;
     SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selectedPreset,0);
     for(int i=0;i<ContentCount;++i){SetWindowTextW(GetDlgItem(hwnd,400+i),Tr(contents[i].en,contents[i].zh));SendDlgItemMessageW(hwnd,400+i,BM_SETCHECK,contents[i].enabled?BST_CHECKED:BST_UNCHECKED,0);}
     TCITEMW item{};item.mask=TCIF_TEXT;
@@ -438,7 +456,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
         for(int i=0;i<ContentCount;++i)CreateWindowW(L"BUTTON",L"",WS_CHILD|WS_TABSTOP|BS_AUTOCHECKBOX,0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(400+i)),nullptr,nullptr);
         for(int i=0;i<OptionCount;++i) {
             CreateWindowW(L"STATIC",options[i].label,WS_CHILD|WS_VISIBLE,0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(200+i)),nullptr,nullptr);
-            edits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",Number(options[i].value).c_str(),WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_NUMBER|ES_AUTOHSCROLL,0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(100+i)),nullptr,nullptr);
+            edits[i]=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",OptionText(i).c_str(),WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL|(i==2?0:ES_NUMBER),0,0,0,0,hwnd,reinterpret_cast<HMENU>(static_cast<INT_PTR>(100+i)),nullptr,nullptr);
         }
         CreateWindowW(L"STATIC",L"Changes preview and save automatically.\nWidth expands when needed to fit text.",WS_CHILD|WS_VISIBLE,0,0,0,0,hwnd,reinterpret_cast<HMENU>(300),nullptr,nullptr);
         CreateWindowW(L"BUTTON",L"Close",WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON,0,0,0,0,hwnd,reinterpret_cast<HMENU>(301),nullptr,nullptr);
@@ -455,7 +473,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
     case WM_COMMAND: {
         const int id=LOWORD(w);
         if(id>=400 && id<400+ContentCount && HIWORD(w)==BN_CLICKED){contents[id-400].enabled=SendDlgItemMessageW(hwnd,id,BM_GETCHECK,0,0)==BST_CHECKED;Layout();if(!selfTesting)SaveSettings();return 0;}
-        if((id==307 || id==309) && HIWORD(w)==CBN_SELCHANGE){const int selected=static_cast<int>(SendDlgItemMessageW(hwnd,id,CB_GETCURSEL,0,0));if(selected>=0 && selected<3){if(id==307){advanced=selected==2;detailed=selected!=1;}else {ApplyPreset(selected);for(int i=0;i<OptionCount;++i)SetWindowTextW(edits[i],Number(options[i].value).c_str());SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selected,0);}Layout();if(!selfTesting)SaveSettings();}return 0;}
+        if((id==307 || id==309) && HIWORD(w)==CBN_SELCHANGE){const int selected=static_cast<int>(SendDlgItemMessageW(hwnd,id,CB_GETCURSEL,0,0));if(selected>=0 && selected<3){if(id==307){advanced=selected==2;detailed=selected!=1;}else {ApplyPreset(selected);for(int i=0;i<OptionCount;++i)SetWindowTextW(edits[i],OptionText(i).c_str());SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selected,0);}Layout();if(!selfTesting)SaveSettings();}return 0;}
 
         if((id==303 || id==305) && HIWORD(w)==CBN_SELCHANGE) {
             const int selected=static_cast<int>(SendDlgItemMessageW(hwnd,id,CB_GETCURSEL,0,0));
@@ -467,9 +485,14 @@ LRESULT CALLBACK SettingsProc(HWND hwnd,UINT message,WPARAM w,LPARAM l) {
         }
         if(id==301 || id==IDCANCEL) { DestroyWindow(hwnd);return 0; }
         if(id>=100 && id<100+OptionCount && (HIWORD(w)==EN_CHANGE || HIWORD(w)==EN_KILLFOCUS) && settingsHandle) {
+            if(id==102){wchar_t text[128]{};GetWindowTextW(edits[2],text,128);
+                if(ParseSpacing(text,rowSpacing)){SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,3,0);Layout();if(!selfTesting)SaveSettings();}
+                else if(HIWORD(w)==EN_KILLFOCUS)SetWindowTextW(edits[2],OptionText(2).c_str());
+                return 0;
+            }
             const int i=id-100; BOOL valid=FALSE; const UINT value=GetDlgItemInt(hwnd,id,&valid,FALSE);
             if(valid && value>=static_cast<UINT>(options[i].minimum) && value<=static_cast<UINT>(options[i].maximum)) {options[i].value=static_cast<int>(value);SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,3,0);Layout();if(!selfTesting) SaveSettings();}
-            else if(HIWORD(w)==EN_KILLFOCUS) SetWindowTextW(edits[i],Number(options[i].value).c_str());
+            else if(HIWORD(w)==EN_KILLFOCUS) SetWindowTextW(edits[i],OptionText(i).c_str());
         }
         return 0;
     }
@@ -500,13 +523,14 @@ std::vector<TmaLine> TmaLines(){
  else lines.push_back({reading.slots?Tr(L"PMU active",L"PMU 采集中"):Tr(L"Waiting for valid counters",L"等待有效计数"),L""});
  return lines;
 }
-struct TmaMetrics {int pad=0,gap=0,line=0,title=0,width=0,height=0,value=0;};
+struct TmaMetrics {int pad=0,gap=0,line=0,title=0,width=0,height=0,value=0;float rowGap=0;};
 TmaMetrics MeasureTma(HDC dc,HFONT font,HFONT bold,const std::vector<TmaLine>& lines,float dpi){
- TmaMetrics m;m.pad=static_cast<int>(std::ceil(options[6].value*dpi));m.gap=static_cast<int>(std::ceil((std::max)(1,options[2].value)*dpi));
+ TmaMetrics m;m.pad=static_cast<int>(std::ceil(options[6].value*dpi));m.gap=static_cast<int>(std::ceil((std::max)(1.0f,rowSpacing)*dpi));
  SelectObject(dc,font);TEXTMETRICW tm{};GetTextMetricsW(dc,&tm);m.line=tm.tmHeight+2;m.value=0;int w=0;
  for(const auto& row:lines){SelectObject(dc,row.heading?bold:font);SIZE label{},value{};GetTextExtentPoint32W(dc,row.label.c_str(),static_cast<int>(row.label.size()),&label);const std::wstring valueText=row.value.size()>6?row.value:L"999.9%";GetTextExtentPoint32W(dc,valueText.c_str(),static_cast<int>(valueText.size()),&value);m.value=(std::max)(m.value,static_cast<int>(value.cx)+m.gap*2);w=(std::max)(w,static_cast<int>(label.cx)+(row.value.empty()?0:static_cast<int>(value.cx)+m.gap*3));}
  SelectObject(dc,bold);GetTextMetricsW(dc,&tm);m.title=tm.tmHeight+2;m.width=(std::max)(static_cast<int>(std::ceil(options[1].value*dpi)),w+2*m.pad);m.height=2*m.pad;
- for(const auto& row:lines)m.height+=(row.heading?m.title:m.line)+m.gap;
+ m.rowGap=(std::max)(rowSpacing*dpi,1.0f-static_cast<float>((std::min)(m.line,m.title)));float height=static_cast<float>(m.pad),bottom=height;
+ for(const auto& row:lines){const float h=static_cast<float>(row.heading?m.title:m.line);bottom=(std::max)(bottom,height+h);height+=h+m.rowGap;}m.height=static_cast<int>(std::ceil((std::max)(bottom,height)+m.pad));
  return m;
 }
 HFONT TmaFont(float dpi,bool title){return CreateFontW(-static_cast<int>(std::ceil((title?options[3].value:options[4].value)*dpi)),0,0,0,title?FW_BOLD:FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");}
@@ -527,8 +551,8 @@ LRESULT CALLBACK TmaProc(HWND hwnd,UINT message,WPARAM w,LPARAM l){
  switch(message){
  case WM_PAINT:{PAINTSTRUCT ps{};HDC screen=BeginPaint(hwnd,&ps);RECT client{};GetClientRect(hwnd,&client);HDC dc=CreateCompatibleDC(screen);HBITMAP bitmap=CreateCompatibleBitmap(screen,client.right,client.bottom);HGDIOBJ oldBitmap=SelectObject(dc,bitmap);
   HBRUSH background=CreateSolidBrush(RGB(23,30,43));FillRect(dc,&client,background);DeleteObject(background);SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(237,243,255));
-  const float dpi=static_cast<float>(GetDpiForWindow(hwnd))/96;HFONT font=TmaFont(dpi,false),bold=TmaFont(dpi,true);HGDIOBJ oldFont=SelectObject(dc,font);const auto lines=TmaLines();const auto metrics=MeasureTma(dc,font,bold,lines,dpi);int y=metrics.pad-tmaScroll;
-  for(const auto& row:lines){SelectObject(dc,row.heading?bold:font);const int h=row.heading?metrics.title:metrics.line;RECT label{metrics.pad,y,client.right-metrics.pad-(row.value.empty()?0:metrics.value),y+h};DrawTextW(dc,row.label.c_str(),-1,&label,DT_LEFT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);if(!row.value.empty()){RECT value{client.right-metrics.pad-metrics.value,y,client.right-metrics.pad,y+h};DrawTextW(dc,row.value.c_str(),-1,&value,DT_RIGHT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);}y+=h+metrics.gap;}
+  const float dpi=static_cast<float>(GetDpiForWindow(hwnd))/96;HFONT font=TmaFont(dpi,false),bold=TmaFont(dpi,true);HGDIOBJ oldFont=SelectObject(dc,font);const auto lines=TmaLines();const auto metrics=MeasureTma(dc,font,bold,lines,dpi);float y=static_cast<float>(metrics.pad-tmaScroll);
+  for(const auto& row:lines){SelectObject(dc,row.heading?bold:font);const int h=row.heading?metrics.title:metrics.line,top=static_cast<int>(std::round(y));RECT label{metrics.pad,top,client.right-metrics.pad-(row.value.empty()?0:metrics.value),top+h};DrawTextW(dc,row.label.c_str(),-1,&label,DT_LEFT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);if(!row.value.empty()){RECT value{client.right-metrics.pad-metrics.value,top,client.right-metrics.pad,top+h};DrawTextW(dc,row.value.c_str(),-1,&value,DT_RIGHT|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);}y+=static_cast<float>(h)+metrics.rowGap;}
   BitBlt(screen,0,0,client.right,client.bottom,dc,0,0,SRCCOPY);SelectObject(dc,oldFont);DeleteObject(font);DeleteObject(bold);SelectObject(dc,oldBitmap);DeleteObject(bitmap);DeleteDC(dc);EndPaint(hwnd,&ps);return 0;}
  case WM_ERASEBKGND:return 1;
  case WM_LBUTTONDOWN:ReleaseCapture();SendMessageW(hwnd,WM_NCLBUTTONDOWN,HTCAPTION,l);return 0;
@@ -678,7 +702,7 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
             SendDlgItemMessageW(settingsHandle,401,BM_SETCHECK,BST_CHECKED,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(401,BN_CLICKED),0);
             if(!memoryEnabled.load())result=23;
             detailed=true;contents[0].enabled=false;Layout();
-            if(CoreRowHeight(CoreKind::Performance)!=(std::max)(textHeight,static_cast<float>(options[5].value)))result=21;
+            if(CoreRowHeight(CoreKind::Performance)!=rowHeight)result=21;
             TabCtrl_SetCurSel(GetDlgItem(settingsHandle,500),0);SendMessageW(settingsHandle,WM_NOTIFY,500,reinterpret_cast<LPARAM>(&changed));
             SendDlgItemMessageW(settingsHandle,307,CB_SETCURSEL,2,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(307,CBN_SELCHANGE),0);
             if(!advanced || !detailed || !(pmuOptions.load()&4u) || !tmaHandle || !IsWindowVisible(tmaHandle))result=28;
@@ -689,6 +713,24 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
             if(advanced || detailed || (pmuOptions.load()&4u) || IsWindowVisible(tmaHandle))result=31;
             SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
             std::printf("New UI checks: mode/presets/refresh/tabs/content/persistence/EN/P-core spacing exit=%d\n",result);
+            // Exercise actual edit notifications and INI round trips, including partial typing.
+            float parsed=0;
+            for(const auto* invalid:{L"",L"-",L".",L"NaN",L"inf",L"1.5junk",L"-40.1",L"40.1"})if(ParseSpacing(invalid,parsed))result=34;
+            if(GetWindowLongPtrW(edits[2],GWL_STYLE)&ES_NUMBER)result=35;
+            for(const auto* spacing:{L"-1.5",L"0.25",L"-40",L"40"}){
+                SetWindowTextW(edits[2],spacing);ParseSpacing(spacing,parsed);if(rowSpacing!=parsed)result=36;
+                SaveSettings();rowSpacing=5;ReadPreferences();if(rowSpacing!=parsed)result=37;
+                for(bool mode:{false,true}){detailed=mode;Layout();if(rowHeight<1 || CoreRowHeight(CoreKind::Unknown)<1 || CoreRowHeight(CoreKind::Performance)<1)result=38;}
+            }
+            SetWindowTextW(edits[2],L"-1.5");SetWindowTextW(edits[2],L"-");
+            SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(102,EN_KILLFOCUS),reinterpret_cast<LPARAM>(edits[2]));
+            wchar_t spacingText[64]{};GetWindowTextW(edits[2],spacingText,64);if(wcscmp(spacingText,L"-1.5")!=0)result=39;
+            HDC spacingDc=GetDC(windowHandle);HFONT spacingFont=TmaFont(1.25f,false),spacingBold=TmaFont(1.25f,true);HGDIOBJ spacingOld=SelectObject(spacingDc,spacingFont);
+            const auto spacingMetrics=MeasureTma(spacingDc,spacingFont,spacingBold,TmaLines(),1.25f);
+            if(spacingMetrics.rowGap!=-1.875f || spacingMetrics.height<=0 || spacingMetrics.width<=0)result=41;
+            SelectObject(spacingDc,spacingOld);DeleteObject(spacingFont);DeleteObject(spacingBold);ReleaseDC(windowHandle,spacingDc);
+            ApplyPreset(1);if(rowSpacing!=5)result=40;SetWindowTextW(edits[2],OptionText(2).c_str());Layout();
+            std::printf("Signed/fractional spacing: input, invalid/partial values, persistence, layout bounds and presets exit=%d\n",result);
             SetWindowTextW(edits[4],L"36");SetWindowTextW(edits[1],L"220");
             if(contentWidth-labelWidth-frequencyWidth-ipcWidth-busyWidth-2*options[6].value<32)result=2;
             std::size_t displayed=0;for(const auto& group:displayGroups){if(group.kind==CoreKind::Efficiency && group.physical.size()>6)result=11;for(auto core:group.physical)displayed+=topology.cores[core].siblings.size();}if(displayed!=processorCount)result=12;

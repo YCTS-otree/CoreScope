@@ -227,3 +227,10 @@
 - hardware_tests.exe、pmu_tests.exe、CoreScope.exe --version / --ui-test / --sensor-test 均 exit=0；文件版本及产品版本均为 1.9.0。
 - 本轮机器为 Intel i7-12700KF（12 物理核心 / 20 逻辑处理器），没有重新验证 AMD 硬件，也没有截图视觉验收。
 - 日志位于 build/x64/Release/；发布包不包含诊断日志、用户配置或中间构建产物。保留打包前工作区中已有的旧发布文件删除记录。
+
+## v1.9.1 行间距验证（2026-10-28）
+
+- 通过本机 HTTP 代理拉取到 main 的 9f29ac8 后，在独立分支修改；现有 MSVC v145 / Windows SDK Release x64 /W4 /WX 构建通过。
+- UI 自检覆盖 -1.5、0.25、-40、40 的编辑通知与 INI 往返，非法数字/半输入的恢复，预设重置，各类核心正行步进及 TMA 125% DPI 的小数间隔，exit=0；原有配置迁移和模式/字体/设置回归通过。
+- 管理员版前一轮 UI 自检通过；最终构建的演示测试副本仅将运行权限清单设为 asInvoker，普通权限 --ui-test exit=0。正式程序保留 RequireAdministrator；本次不重新声明传感器实机验证或截图视觉验收。
+- 最终测试日志位于被忽略的 build/spacing-ui/ui-test.txt。
