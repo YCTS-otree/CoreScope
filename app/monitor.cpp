@@ -94,7 +94,7 @@ int savedX = CW_USEDEFAULT, savedY = CW_USEDEFAULT;
 bool preview = false;
 bool selfTesting = false;
 int language = 0;
-bool detailed=false,advanced=false;
+bool detailed=true,advanced=false;
 TmaReading tmaReading;DWORD tmaError=ERROR_NOT_SUPPORTED;double tmaPublishedAt=0;
 int tmaX=CW_USEDEFAULT,tmaY=CW_USEDEFAULT,tmaScroll=0,tmaFullHeight=0;unsigned tmaGoodSamples=0,tmaMemoryGoodSamples=0;
 std::wstring cpuTitle;
@@ -173,7 +173,7 @@ void ReadPreferences() {
     savedX = static_cast<int>(GetPrivateProfileIntW(L"UI", L"X", CW_USEDEFAULT, iniPath.c_str()));
     savedY = static_cast<int>(GetPrivateProfileIntW(L"UI", L"Y", CW_USEDEFAULT, iniPath.c_str()));
     // Upgrade the exact old default; preserve deliberately customized layouts.
-    if(detailed && !advanced && options[1].value==340 && rowSpacing==5 && options[3].value==19 && options[4].value==13 && options[5].value==12 && options[6].value==14 && options[7].value==12){ApplyPreset(1);detailed=false;}
+    if(!advanced && options[1].value==340 && rowSpacing==5 && options[3].value==19 && options[4].value==13 && options[5].value==12 && options[6].value==14 && options[7].value==12)ApplyPreset(1);
 }
 // Keep old settings intact and never overwrite an existing CoreScope configuration.
 std::wstring ResolveSettingsPath(const std::wstring& local) {
@@ -744,7 +744,9 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
             std::printf("Core header/own bars spacing reacts to zero, negative fractional and positive values exit=%d\n",result);
             const int oldDefault[]={92,340,5,19,13,12,14,12};
             for(int i=1;i<8;++i)options[i].value=oldDefault[i];rowSpacing=5;detailed=true;SaveSettings();ReadPreferences();
-            if(detailed || options[1].value!=250 || options[4].value!=10)result=44;
+            if(!detailed || options[1].value!=250 || options[4].value!=10)result=44;
+            for(int i=1;i<8;++i)options[i].value=oldDefault[i];rowSpacing=5;detailed=false;SaveSettings();ReadPreferences();
+            if(detailed || options[1].value!=250 || options[4].value!=10)result=46;
             for(int i=1;i<8;++i)options[i].value=oldDefault[i];rowSpacing=-2.5f;detailed=true;SaveSettings();ReadPreferences();
             if(!detailed || options[1].value!=340 || rowSpacing!=-2.5f)result=45;
             ApplyPreset(1);SetWindowTextW(edits[2],OptionText(2).c_str());Layout();
