@@ -119,8 +119,9 @@ float CoreRowHeight(CoreKind) {
 }
 float CoreHeaderHeight() { return (std::max)(1.0f,textHeight+RowGap()); }
 float CoreGroupGap() { return (std::max)(0.0f,rowSpacing); }
+float FooterRowHeight() { return (std::max)(1.0f,textHeight+RowGap()); }
 void ApplyPreset(int preset) {
-    const int tiny[]={92,210,0,12,8,4,6,6,1,1};
+    const int tiny[]={92,180,-2,12,8,8,6,6,1,1};
     const int smallPreset[]={92,230,1,13,9,5,8,8};
     const int normal[]={92,250,1,14,10,6,8,8};
     if(preset==2){for(int i=0;i<OptionCount;++i)options[i].value=tiny[i];}
@@ -209,15 +210,15 @@ void Layout() {
     normalFont->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP); titleFont->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
     titleHeight = Measure(cpuTitle, titleFont).height;
     textHeight = Measure(L"Temperature: 100.0 \u00b0C", normalFont).height;
-    labelWidth = Measure(detailed?L"Core" + Number(static_cast<int>(processorCount) - 1):L"P "+Number(static_cast<int>(topology.cores.size())-1), normalFont).width + 10;
-    frequencyWidth = contents[3].enabled?Measure(detailed?L"00.00G":L"0.0 GHz", normalFont).width + 12:0;
-    temperatureColumnWidth=Measure(L"100°C",normalFont).width+8;ipcWidth=contents[0].enabled?Measure(L"99.99",normalFont).width+12:0;busyWidth=detailed?Measure(L"100%",normalFont).width+12:0;
+    labelWidth = Measure(detailed?Number(static_cast<int>(processorCount) - 1):L"P "+Number(static_cast<int>(topology.cores.size())-1), normalFont).width + 6;
+    frequencyWidth = contents[3].enabled?Measure(detailed?L"00.00G":L"0.0 GHz", normalFont).width + 6:0;
+    temperatureColumnWidth=Measure(L"100°C",normalFont).width+4;ipcWidth=contents[0].enabled?Measure(L"99.99",normalFont).width+6:0;busyWidth=detailed?Measure(L"100%",normalFont).width+6:0;
     const float padding = static_cast<float>(options[6].value);
-    contentWidth = (std::max)({static_cast<float>(options[1].value), labelWidth + frequencyWidth + ipcWidth + busyWidth + 70 + 2 * padding, Measure(cpuTitle, titleFont).width + 2 * padding, Measure(L"Temperature: 100.0 \u00b0C", normalFont).width + 2 * padding});
+    contentWidth = (std::max)({static_cast<float>(options[1].value), labelWidth + frequencyWidth + ipcWidth + busyWidth + 40 + 2 * padding, Measure(L"Temperature: 100.0 \u00b0C", normalFont).width + 2 * padding});
     if(contents[0].enabled || contents[2].enabled)contentWidth=(std::max)(contentWidth,Measure(L"PMU unavailable (error 4294967295)",normalFont).width+2*padding);
     if(topology.amd && !preview)contentWidth=(std::max)(contentWidth,Measure(L"AMD sensors unavailable (4294967295)",normalFont).width+2*padding);
     if(contents[2].enabled)contentWidth=(std::max)(contentWidth,Measure(L"LLC MPKI (P): 999999.9",normalFont).width+2*padding);
-    if(detailed && contents[4].enabled)for(const auto& group:displayGroups)contentWidth=(std::max)(contentWidth,Measure(CoreKindName(group.kind),normalFont).width+40+temperatureColumnWidth*static_cast<float>(group.physical.size())+2*padding);
+    if(detailed && contents[4].enabled)for(const auto& group:displayGroups)contentWidth=(std::max)(contentWidth,Measure(CoreKindName(group.kind),normalFont).width+12+temperatureColumnWidth*static_cast<float>(group.physical.size())+2*padding);
     rowHeight = (std::max)(textHeight, static_cast<float>(options[5].value)) + RowGap();
 
     RECT current{}; GetWindowRect(windowHandle, &current);
@@ -231,13 +232,13 @@ void Layout() {
         for(const auto& group:displayGroups){contentHeight+=CoreHeaderHeight()+CoreGroupGap();for(auto core:group.physical)contentHeight+=CoreRowHeight(group.kind)*static_cast<float>(topology.cores[core].siblings.size());}
     } else {
         contentHeight+=rowHeight*static_cast<float>(processorCount);
-        if(contents[4].enabled)contentHeight+=textHeight+4;
+        if(contents[4].enabled)contentHeight+=FooterRowHeight();
     }
-    if(contents[1].enabled)contentHeight+=(textHeight+4)*2;
-    if(contents[2].enabled)contentHeight+=textHeight+4;
-    if(contents[0].enabled || contents[2].enabled)contentHeight+=textHeight+4;
-    if(preview)contentHeight+=textHeight+4;
-    if(topology.amd && !preview){if(contents[3].enabled)contentHeight+=textHeight+4;if(contents[4].enabled || contents[5].enabled)contentHeight+=textHeight+4;}
+    if(contents[1].enabled)contentHeight+=(FooterRowHeight())*2;
+    if(contents[2].enabled)contentHeight+=FooterRowHeight();
+    if(contents[0].enabled || contents[2].enabled)contentHeight+=FooterRowHeight();
+    if(preview)contentHeight+=FooterRowHeight();
+    if(topology.amd && !preview){if(contents[3].enabled)contentHeight+=FooterRowHeight();if(contents[4].enabled || contents[5].enabled)contentHeight+=FooterRowHeight();}
     const int width=Px(contentWidth);
     const int height = (std::min)(Px(contentHeight), static_cast<int>(monitor.rcWork.bottom - monitor.rcWork.top));
     const int x = std::clamp(current.left, monitor.rcWork.left, monitor.rcWork.right - width);
@@ -327,20 +328,20 @@ void Paint() {
                 double ghz=-1;for(auto i:physical.siblings)if(i<snapshot.size() && snapshot[i].ghz>=0){ghz=snapshot[i].ghz;break;}
                 if(contents[3].enabled)DrawTextLine(format(ghz,L"%.1f GHz"),normalFont,freqX,textY,frequencyWidth,textHeight+2,textBrush);
             }
-            if(contents[4].enabled){double hottest=topology.amd?sensors.packageTemperature:-1;int alert=topology.amd?packageAlert:0;for(std::size_t i=0;i<sensors.cores.size();++i){hottest=(std::max)(hottest,sensors.cores[i].temperature);if(i<alerts.size())alert=(std::max)(alert,alerts[i]);}const float w=Measure(L"Temperature: ",normalFont).width;DrawTextLine(L"Temperature: ",normalFont,p,y,w,textHeight+2,mutedBrush);DrawTextLine(format(hottest,L"%.1f °C"),normalFont,p+w,y,width-w,textHeight+2,color(alert));y+=textHeight+4;}
+            if(contents[4].enabled){double hottest=topology.amd?sensors.packageTemperature:-1;int alert=topology.amd?packageAlert:0;for(std::size_t i=0;i<sensors.cores.size();++i){hottest=(std::max)(hottest,sensors.cores[i].temperature);if(i<alerts.size())alert=(std::max)(alert,alerts[i]);}const float w=Measure(L"Temperature: ",normalFont).width;DrawTextLine(L"Temperature: ",normalFont,p,y,w,textHeight+2,mutedBrush);DrawTextLine(format(hottest,L"%.1f °C"),normalFont,p+w,y,width-w,textHeight+2,color(alert));y+=FooterRowHeight();}
         }
         // GB/s only: there is no guessed or fixed bandwidth ceiling.
-        if(contents[1].enabled){DrawTextLine(L"RAM R: "+format(sensors.readGBs,L"%.1f GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;DrawTextLine(L"RAM W: "+format(sensors.writeGBs,L"%.1f GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
-        if(contents[2].enabled){DrawTextLine(L"LLC MPKI (P): "+format(sensors.llcMpki,L"%.1f"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
+        if(contents[1].enabled){DrawTextLine(L"RAM R: "+format(sensors.readGBs,L"%.1f GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=FooterRowHeight();DrawTextLine(L"RAM W: "+format(sensors.writeGBs,L"%.1f GB/s"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=FooterRowHeight();}
+        if(contents[2].enabled){DrawTextLine(L"LLC MPKI (P): "+format(sensors.llcMpki,L"%.1f"),normalFont,p,y,width,textHeight+2,mutedBrush);y+=FooterRowHeight();}
         if(contents[0].enabled || contents[2].enabled){
             wchar_t pmuStatus[96]{};
             if(snapshotPmuError)swprintf_s(pmuStatus,L"PMU unavailable (error %lu)",snapshotPmuError);
             else wcscpy_s(pmuStatus,std::any_of(snapshot.begin(),snapshot.end(),[](const Row& row){return row.ipc>=0;})?L"PMU: active (1s updates)":L"PMU: waiting for fresh data");
-            DrawTextLine(pmuStatus,normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;
+            DrawTextLine(pmuStatus,normalFont,p,y,width,textHeight+2,mutedBrush);y+=FooterRowHeight();
         }
         if(topology.amd && !preview){
-            if(contents[3].enabled){const bool frequencyValid=std::any_of(sensors.frequency.begin(),sensors.frequency.end(),[](double value){return value>=0;});DrawTextLine(sensors.osFrequency?L"Frequency: Windows reported":frequencyValid?L"Frequency: hardware P-state":L"Frequency: unavailable",normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
-            if(contents[4].enabled || contents[5].enabled){const auto sensorStatus=sensors.sensorError?L"AMD sensors unavailable ("+std::to_wstring(sensors.sensorError)+L")":L"AMD sensors: PawnIO active";DrawTextLine(sensorStatus,normalFont,p,y,width,textHeight+2,mutedBrush);y+=textHeight+4;}
+            if(contents[3].enabled){const bool frequencyValid=std::any_of(sensors.frequency.begin(),sensors.frequency.end(),[](double value){return value>=0;});DrawTextLine(sensors.osFrequency?L"Frequency: Windows reported":frequencyValid?L"Frequency: hardware P-state":L"Frequency: unavailable",normalFont,p,y,width,textHeight+2,mutedBrush);y+=FooterRowHeight();}
+            if(contents[4].enabled || contents[5].enabled){const auto sensorStatus=sensors.sensorError?L"AMD sensors unavailable ("+std::to_wstring(sensors.sensorError)+L")":L"AMD sensors: PawnIO active";DrawTextLine(sensorStatus,normalFont,p,y,width,textHeight+2,mutedBrush);y+=FooterRowHeight();}
         }
         if(preview)DrawTextLine(L"DEMO - simulated CPU data",normalFont,p,y,width,textHeight+2,mutedBrush);
         if(target->EndDraw()==D2DERR_RECREATE_TARGET)DropTarget();
@@ -415,11 +416,11 @@ void UpdateSettingsLanguage(HWND hwnd) {
     SendDlgItemMessageW(hwnd,307,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(Tr(L"Compact",L"精简模式")));
     SendDlgItemMessageW(hwnd,307,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(Tr(L"Advanced",L"进阶模式")));
     SendDlgItemMessageW(hwnd,307,CB_SETCURSEL,advanced?2:detailed?0:1,0);
-    for(const auto* label:{Tr(L"Small",L"小号"),Tr(L"Default",L"默认"),Tr(L"Very small",L"很小"),Tr(L"Custom",L"自定义")})SendDlgItemMessageW(hwnd,309,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label));
+    for(const auto* label:{Tr(L"Small",L"小号"),Tr(L"Default",L"默认"),Tr(L"Very small (Laptop)",L"很小（笔记本）"),Tr(L"Custom",L"自定义")})SendDlgItemMessageW(hwnd,309,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label));
     int selectedPreset=3;
     if(options[1].value==230 && rowSpacing==1 && options[3].value==13 && options[4].value==9 && options[5].value==5 && options[6].value==8 && options[7].value==8)selectedPreset=0;
     if(options[1].value==250 && rowSpacing==1 && options[3].value==14 && options[4].value==10 && options[5].value==6 && options[6].value==8 && options[7].value==8)selectedPreset=1;
-    if(options[0].value==92 && options[1].value==210 && rowSpacing==0 && options[3].value==12 && options[4].value==8 && options[5].value==4 && options[6].value==6 && options[7].value==6 && options[8].value==1 && options[9].value==1)selectedPreset=2;
+    if(options[0].value==92 && options[1].value==180 && rowSpacing==-2 && options[3].value==12 && options[4].value==8 && options[5].value==8 && options[6].value==6 && options[7].value==6 && options[8].value==1 && options[9].value==1)selectedPreset=2;
     SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selectedPreset,0);
     for(int i=0;i<ContentCount;++i){SetWindowTextW(GetDlgItem(hwnd,400+i),Tr(contents[i].en,contents[i].zh));SendDlgItemMessageW(hwnd,400+i,BM_SETCHECK,contents[i].enabled?BST_CHECKED:BST_UNCHECKED,0);}
     TCITEMW item{};item.mask=TCIF_TEXT;
@@ -715,7 +716,7 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
             if(!advanced || !detailed || !(pmuOptions.load()&4u) || !tmaHandle || !IsWindowVisible(tmaHandle))result=28;
             SaveSettings();advanced=false;ReadPreferences();if(!advanced || !detailed)result=29;
             SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,2,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
-            if(options[1].value!=210 || options[4].value!=8 || options[8].value!=1)result=30;
+            if(options[1].value!=180 || options[4].value!=8 || options[8].value!=1)result=30;
             SendDlgItemMessageW(settingsHandle,307,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(307,CBN_SELCHANGE),0);
             if(advanced || detailed || (pmuOptions.load()&4u) || IsWindowVisible(tmaHandle))result=31;
             SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
@@ -751,6 +752,14 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
             if(!detailed || options[1].value!=340 || rowSpacing!=-2.5f)result=45;
             ApplyPreset(1);SetWindowTextW(edits[2],OptionText(2).c_str());Layout();
             std::printf("Smaller presets and legacy default/custom settings migration exit=%d\n",result);
+            std::vector<bool> savedContent;for(auto& c:contents){savedContent.push_back(c.enabled);c.enabled=true;}
+            ApplyPreset(2);detailed=true;Layout();const float laptopWidth=contentWidth;
+            if(std::abs(laptopWidth-180)>.01f || rowSpacing!=-2 || options[5].value!=8 || std::abs(FooterRowHeight()-(textHeight-2))>.01f)result=47;
+            SetWindowTextW(edits[1],L"230");if(contentWidth<=laptopWidth || std::abs(contentWidth-230)>.01f)result=48;
+            UpdateSettingsLanguage(settingsHandle);wchar_t laptopLabel[64]{};SendDlgItemMessageW(settingsHandle,309,CB_GETLBTEXT,2,reinterpret_cast<LPARAM>(laptopLabel));
+            if(wcscmp(laptopLabel,language?L"很小（笔记本）":L"Very small (Laptop)")!=0)result=49;
+            for(int i=0;i<ContentCount;++i)contents[i].enabled=savedContent[i];ApplyPreset(1);Layout();
+            std::printf("Laptop preset snapshot, footer spacing and 180/230 DIP width response exit=%d\n",result);
             std::printf("Signed/fractional spacing: input, invalid/partial values, persistence, layout bounds and presets exit=%d\n",result);
             SetWindowTextW(edits[4],L"36");SetWindowTextW(edits[1],L"220");
             if(contentWidth-labelWidth-frequencyWidth-ipcWidth-busyWidth-2*options[6].value<32)result=2;
