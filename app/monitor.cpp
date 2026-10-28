@@ -33,19 +33,19 @@ struct Row { WORD group; BYTE cpu; double total = -1, kernel = -1, ghz = -1, tim
 struct Option { const wchar_t* key; const wchar_t* label; int value, minimum, maximum; };
 Option options[] = {
     {L"Opacity", L"Opacity (%)", 92, 15, 100},
-    {L"Width", L"Window width (DIP)", 340, 220, 1200},
-    {L"Gap", L"Row spacing (DIP)", 5, -40, 40},
-    {L"Title", L"Title font size (DIP)", 19, 10, 48},
-    {L"Text", L"Item font size (DIP)", 13, 8, 36},
-    {L"Bar", L"Bar height (DIP)", 12, 2, 48},
-    {L"Padding", L"Window padding (DIP)", 14, 4, 48},
-    {L"Radius", L"Corner radius (DIP)", 12, 0, 40},
+    {L"Width", L"Window width (DIP)", 250, 180, 1200},
+    {L"Gap", L"Row spacing (DIP)", 1, -40, 40},
+    {L"Title", L"Title font size (DIP)", 14, 10, 48},
+    {L"Text", L"Item font size (DIP)", 10, 8, 36},
+    {L"Bar", L"Bar height (DIP)", 6, 2, 48},
+    {L"Padding", L"Window padding (DIP)", 8, 4, 48},
+    {L"Radius", L"Corner radius (DIP)", 8, 0, 40},
     {L"RefreshHz", L"Refresh rate (Hz)", 4, 1, 10},
     {L"Topmost", L"Always on top (0 / 1)", 1, 0, 1}
 };
 constexpr int OptionCount = static_cast<int>(sizeof(options) / sizeof(options[0]));
 // Only spacing is fractional; the other options keep their integer semantics.
-float rowSpacing=5;
+float rowSpacing=1;
 HWND windowHandle = nullptr, settingsHandle = nullptr, tmaHandle=nullptr;
 void SyncTmaWindow();
 void ShowSettings();
@@ -88,13 +88,13 @@ double temperature = -1;
 std::wstring sampleStatus = L"Initializing sensors...";
 HANDLE stopEvent = nullptr;
 std::atomic<int> interval{250};
-float scale = 1, contentWidth = 340, contentHeight = 100, rowHeight = 20, labelWidth = 50, frequencyWidth = 70, titleHeight = 24, textHeight = 18;
+float scale = 1, contentWidth = 250, contentHeight = 100, rowHeight = 20, labelWidth = 50, frequencyWidth = 70, titleHeight = 24, textHeight = 18;
 int scrollOffset = 0;
 int savedX = CW_USEDEFAULT, savedY = CW_USEDEFAULT;
 bool preview = false;
 bool selfTesting = false;
 int language = 0;
-bool detailed=true,advanced=false;
+bool detailed=false,advanced=false;
 TmaReading tmaReading;DWORD tmaError=ERROR_NOT_SUPPORTED;double tmaPublishedAt=0;
 int tmaX=CW_USEDEFAULT,tmaY=CW_USEDEFAULT,tmaScroll=0,tmaFullHeight=0;unsigned tmaGoodSamples=0,tmaMemoryGoodSamples=0;
 std::wstring cpuTitle;
@@ -117,10 +117,12 @@ float RowGap() {
 float CoreRowHeight(CoreKind) {
     return (std::max)(textHeight,static_cast<float>(options[5].value)) + RowGap();
 }
+float CoreHeaderHeight() { return (std::max)(1.0f,textHeight+RowGap()); }
+float CoreGroupGap() { return (std::max)(0.0f,rowSpacing); }
 void ApplyPreset(int preset) {
-    const int tiny[]={92,250,1,16,9,6,10,10,1,1};
-    const int smallPreset[]={92,280,3,16,11,10,10,10};
-    const int normal[]={92,340,5,19,13,12,14,12};
+    const int tiny[]={92,210,0,12,8,4,6,6,1,1};
+    const int smallPreset[]={92,230,1,13,9,5,8,8};
+    const int normal[]={92,250,1,14,10,6,8,8};
     if(preset==2){for(int i=0;i<OptionCount;++i)options[i].value=tiny[i];}
     else for(int i=1;i<8;++i)options[i].value=preset==0?smallPreset[i]:normal[i];
     rowSpacing=static_cast<float>(options[2].value);
@@ -160,7 +162,7 @@ void SaveSettings() {
 }
 void ReadPreferences() {
     for(int i=0;i<OptionCount;++i){auto& o=options[i];if(i==2){wchar_t text[128]{};GetPrivateProfileStringW(L"UI",o.key,OptionText(i).c_str(),text,128,iniPath.c_str());ParseSpacing(text,rowSpacing);}else o.value=std::clamp(static_cast<int>(GetPrivateProfileIntW(L"UI",o.key,o.value,iniPath.c_str())),o.minimum,o.maximum);}
-    detailed=GetPrivateProfileIntW(L"UI",L"Detailed",1,iniPath.c_str())!=0;
+    detailed=GetPrivateProfileIntW(L"UI",L"Detailed",detailed?1:0,iniPath.c_str())!=0;
     const auto mode=GetPrivateProfileIntW(L"UI",L"ViewMode",detailed?0:1,iniPath.c_str());advanced=mode==2;detailed=mode!=1;
     tmaX=static_cast<int>(GetPrivateProfileIntW(L"UI",L"TmaX",CW_USEDEFAULT,iniPath.c_str()));tmaY=static_cast<int>(GetPrivateProfileIntW(L"UI",L"TmaY",CW_USEDEFAULT,iniPath.c_str()));
     for(auto& c:contents)c.enabled=GetPrivateProfileIntW(L"UI",c.key,c.enabled?1:0,iniPath.c_str())!=0;
@@ -170,6 +172,8 @@ void ReadPreferences() {
     usageMode.store(std::clamp(static_cast<int>(GetPrivateProfileIntW(L"UI",L"BusyModeV2",0,iniPath.c_str())),0,1));
     savedX = static_cast<int>(GetPrivateProfileIntW(L"UI", L"X", CW_USEDEFAULT, iniPath.c_str()));
     savedY = static_cast<int>(GetPrivateProfileIntW(L"UI", L"Y", CW_USEDEFAULT, iniPath.c_str()));
+    // Upgrade the exact old default; preserve deliberately customized layouts.
+    if(detailed && !advanced && options[1].value==340 && rowSpacing==5 && options[3].value==19 && options[4].value==13 && options[5].value==12 && options[6].value==14 && options[7].value==12){ApplyPreset(1);detailed=false;}
 }
 // Keep old settings intact and never overwrite an existing CoreScope configuration.
 std::wstring ResolveSettingsPath(const std::wstring& local) {
@@ -224,7 +228,7 @@ void Layout() {
     if(detailed) {
         if(contents[4].enabled || contents[5].enabled)contentHeight+=textHeight+6;
         contentHeight+=textHeight+4;
-        for(const auto& group:displayGroups){contentHeight+=textHeight+10;for(auto core:group.physical)contentHeight+=CoreRowHeight(group.kind)*static_cast<float>(topology.cores[core].siblings.size());}
+        for(const auto& group:displayGroups){contentHeight+=CoreHeaderHeight()+CoreGroupGap();for(auto core:group.physical)contentHeight+=CoreRowHeight(group.kind)*static_cast<float>(topology.cores[core].siblings.size());}
     } else {
         contentHeight+=rowHeight*static_cast<float>(processorCount);
         if(contents[4].enabled)contentHeight+=textHeight+4;
@@ -300,9 +304,9 @@ void Paint() {
                 DrawTextLine(label,normalFont,p,y,labelWidth+75,textHeight+2,mutedBrush);
                 float temperatureX=contentWidth-p;
                 if(contents[4].enabled)for(auto it=group.physical.rbegin();it!=group.physical.rend();++it){const auto core=*it;temperatureX-=temperatureColumnWidth;DrawTextLine(format(core<sensors.cores.size()?sensors.cores[core].temperature:-1,L"%.0f°C"),normalFont,temperatureX,y,temperatureColumnWidth,textHeight+2,color(core<alerts.size()?alerts[core]:0));}
-                y+=textHeight+6;
+                y+=CoreHeaderHeight();
                 for(auto physical:group.physical)for(auto i:topology.cores[physical].siblings)drawRow(i,group.kind);
-                y+=4;
+                y+=CoreGroupGap();
             }
         }else{
             for(std::size_t core=0;core<topology.cores.size();++core){const auto& physical=topology.cores[core];const float startY=y;
@@ -413,9 +417,9 @@ void UpdateSettingsLanguage(HWND hwnd) {
     SendDlgItemMessageW(hwnd,307,CB_SETCURSEL,advanced?2:detailed?0:1,0);
     for(const auto* label:{Tr(L"Small",L"小号"),Tr(L"Default",L"默认"),Tr(L"Very small",L"很小"),Tr(L"Custom",L"自定义")})SendDlgItemMessageW(hwnd,309,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label));
     int selectedPreset=3;
-    if(options[1].value==280 && rowSpacing==3 && options[3].value==16 && options[4].value==11 && options[5].value==10 && options[6].value==10 && options[7].value==10)selectedPreset=0;
-    if(options[1].value==340 && rowSpacing==5 && options[3].value==19 && options[4].value==13 && options[5].value==12 && options[6].value==14 && options[7].value==12)selectedPreset=1;
-    if(options[0].value==92 && options[1].value==250 && rowSpacing==1 && options[3].value==16 && options[4].value==9 && options[5].value==6 && options[6].value==10 && options[7].value==10 && options[8].value==1 && options[9].value==1)selectedPreset=2;
+    if(options[1].value==230 && rowSpacing==1 && options[3].value==13 && options[4].value==9 && options[5].value==5 && options[6].value==8 && options[7].value==8)selectedPreset=0;
+    if(options[1].value==250 && rowSpacing==1 && options[3].value==14 && options[4].value==10 && options[5].value==6 && options[6].value==8 && options[7].value==8)selectedPreset=1;
+    if(options[0].value==92 && options[1].value==210 && rowSpacing==0 && options[3].value==12 && options[4].value==8 && options[5].value==4 && options[6].value==6 && options[7].value==6 && options[8].value==1 && options[9].value==1)selectedPreset=2;
     SendDlgItemMessageW(hwnd,309,CB_SETCURSEL,selectedPreset,0);
     for(int i=0;i<ContentCount;++i){SetWindowTextW(GetDlgItem(hwnd,400+i),Tr(contents[i].en,contents[i].zh));SendDlgItemMessageW(hwnd,400+i,BM_SETCHECK,contents[i].enabled?BST_CHECKED:BST_UNCHECKED,0);}
     TCITEMW item{};item.mask=TCIF_TEXT;
@@ -634,16 +638,19 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
     if(rows.empty()){MessageBoxW(nullptr,L"Cannot obtain reliable CPU topology.",L"CoreScope",MB_ICONERROR);return 1;}
     processorCount = rows.size();
     LoadSettings();if(testTma)advanced=detailed=true;if(inspectMode==1 || inspectMode==3){detailed=advanced=false;}if(inspectMode>=0)ApplyPreset(2);if(inspectMode==1)contents[0].enabled=true;if(testPmu){contents[0].enabled=true;contents[2].enabled=true;}stopEvent=CreateEventW(nullptr,TRUE,FALSE,nullptr);if(!stopEvent)return 1;
+    // Optional screenshot hold for demo self-tests; never reads or changes normal settings.
+    wchar_t testGap[64]{};const bool inspectSpacing=selfTest && demo && GetEnvironmentVariableW(L"CORESCOPE_TEST_GAP",testGap,64)>0 && (wcscmp(testGap,L"compact")==0 || ParseSpacing(testGap,rowSpacing));
+    if(inspectSpacing){options[0].value=100;if(wcscmp(testGap,L"compact")!=0){detailed=true;options[4].value=18;}}
     WNDCLASSEXW cls{sizeof(cls)};cls.style=CS_DBLCLKS;cls.lpfnWndProc=WindowProc;cls.hInstance=GetModuleHandleW(nullptr);cls.hCursor=LoadCursorW(nullptr,IDC_ARROW);cls.lpszClassName=selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay";RegisterClassExW(&cls);
     cls.style=0;cls.lpfnWndProc=TmaProc;cls.lpszClassName=L"CpuFreqTma";RegisterClassExW(&cls);
     cls.style=0;cls.lpfnWndProc=SettingsProc;cls.lpszClassName=L"CpuFreqSettings";cls.hbrBackground=reinterpret_cast<HBRUSH>(COLOR_BTNFACE+1);RegisterClassExW(&cls);
-    windowHandle=CreateWindowExW(((preview && !selfTest) || (benchmark>=60 && testPmu) || benchmark==60 ? WS_EX_APPWINDOW : WS_EX_TOOLWINDOW)|WS_EX_LAYERED,selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay",selfTest?L"CoreScope v" CORESCOPE_VERSION_STRING L" (test)":L"CoreScope",WS_POPUP,inspectMode==1?900:savedX==CW_USEDEFAULT?100:savedX,savedY==CW_USEDEFAULT?100:savedY,340,200,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    windowHandle=CreateWindowExW(((preview && !selfTest) || (benchmark>=60 && testPmu) || benchmark==60 ? WS_EX_APPWINDOW : WS_EX_TOOLWINDOW)|WS_EX_LAYERED,selfTest?L"CpuFreqOverlayTest":L"CpuFreqOverlay",selfTest?L"CoreScope v" CORESCOPE_VERSION_STRING L" (test)":L"CoreScope",WS_POPUP,inspectMode==1?900:savedX==CW_USEDEFAULT?100:savedX,savedY==CW_USEDEFAULT?100:savedY,options[1].value,200,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
     if(!windowHandle)return 1;
     if(inspectMode>=0)SetWindowTextW(windowHandle,inspectMode==3?L"v" CORESCOPE_VERSION_STRING L" Compact (LIVE)":inspectMode==1?L"v" CORESCOPE_VERSION_STRING L" Compact layout (DEMO)":L"v" CORESCOPE_VERSION_STRING L" Advanced (LIVE)");
     scale=static_cast<float>(GetDpiForWindow(windowHandle))/96;Layout();trayIcon=CreateTrayIcon();taskbarCreated=RegisterWindowMessageW(L"TaskbarCreated");ChangeWindowMessageFilterEx(windowHandle,taskbarCreated,MSGFLT_ALLOW,nullptr);ChangeWindowMessageFilterEx(windowHandle,activateMessage,MSGFLT_ALLOW,nullptr);Tray(NIM_ADD);
     ShowWindow(windowHandle,SW_SHOWNOACTIVATE);SyncTmaWindow();
     std::thread worker(Sample);
-    if(selfTest) SetTimer(windowHandle,99,benchmark?static_cast<UINT>((benchmark+3)*1000):2500,nullptr);
+    if(selfTest) SetTimer(windowHandle,99,benchmark?static_cast<UINT>((benchmark+3)*1000):inspectSpacing?60000:2500,nullptr);
     FILETIME created{},exited{},kernelStart{},userStart{};GetProcessTimes(GetCurrentProcess(),&created,&exited,&kernelStart,&userStart);double benchmarkStart=MonotonicSeconds();if(benchmark)SetTimer(windowHandle,98,3000,nullptr);
     MSG message{};int result=0;
     while(GetMessageW(&message,nullptr,0,0)>0) {
@@ -680,13 +687,13 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
             GetWindowTextW(GetDlgItem(settingsHandle,301),translated,64);if(wcscmp(translated,L"Close")!=0)result=7;
             translatedMenu=CreateTrayMenu(windowHandle);GetMenuStringW(translatedMenu,2,translated,64,MF_BYCOMMAND);DestroyMenu(translatedMenu);
             if(wcscmp(translated,L"Settings")!=0)result=10;
-            const float detailedHeight=contentHeight;
+            detailed=true;Layout();const float detailedHeight=contentHeight;
             SendDlgItemMessageW(settingsHandle,307,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(307,CBN_SELCHANGE),0);
             if(detailed || contentHeight>=detailedHeight)result=13;
             SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,0,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
-            if(options[1].value!=280 || options[4].value!=11)result=14;
+            if(options[1].value!=230 || options[4].value!=9)result=14;
             SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
-            if(options[1].value!=340 || options[4].value!=13)result=15;
+            if(options[1].value!=250 || options[4].value!=10)result=15;
             SetWindowTextW(edits[8],L"10");if(interval.load()!=100)result=16;
             SetWindowTextW(edits[8],L"4");
             TabCtrl_SetCurSel(GetDlgItem(settingsHandle,500),1);NMHDR changed{};changed.idFrom=500;changed.code=TCN_SELCHANGE;
@@ -708,7 +715,7 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
             if(!advanced || !detailed || !(pmuOptions.load()&4u) || !tmaHandle || !IsWindowVisible(tmaHandle))result=28;
             SaveSettings();advanced=false;ReadPreferences();if(!advanced || !detailed)result=29;
             SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,2,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
-            if(options[1].value!=250 || options[4].value!=9 || options[8].value!=1)result=30;
+            if(options[1].value!=210 || options[4].value!=8 || options[8].value!=1)result=30;
             SendDlgItemMessageW(settingsHandle,307,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(307,CBN_SELCHANGE),0);
             if(advanced || detailed || (pmuOptions.load()&4u) || IsWindowVisible(tmaHandle))result=31;
             SendDlgItemMessageW(settingsHandle,309,CB_SETCURSEL,1,0);SendMessageW(settingsHandle,WM_COMMAND,MAKEWPARAM(309,CBN_SELCHANGE),0);
@@ -729,7 +736,19 @@ int RunMonitor(bool demo, bool selfTest, int benchmark, bool testPmu,bool testTm
             const auto spacingMetrics=MeasureTma(spacingDc,spacingFont,spacingBold,TmaLines(),1.25f);
             if(spacingMetrics.rowGap!=-1.875f || spacingMetrics.height<=0 || spacingMetrics.width<=0)result=41;
             SelectObject(spacingDc,spacingOld);DeleteObject(spacingFont);DeleteObject(spacingBold);ReleaseDC(windowHandle,spacingDc);
-            ApplyPreset(1);if(rowSpacing!=5)result=40;SetWindowTextW(edits[2],OptionText(2).c_str());Layout();
+            ApplyPreset(1);if(rowSpacing!=1)result=40;SetWindowTextW(edits[2],OptionText(2).c_str());Layout();
+            SetWindowTextW(edits[2],L"0");const float zeroHeader=CoreHeaderHeight(),zeroHeight=contentHeight;
+            SetWindowTextW(edits[2],L"-2.5");
+            if(std::abs(CoreHeaderHeight()-(zeroHeader-2.5f))>.001f || CoreGroupGap()!=0 || contentHeight>=zeroHeight)result=42;
+            SetWindowTextW(edits[2],L"5");if(CoreGroupGap()!=5 || CoreHeaderHeight()<=zeroHeader)result=43;
+            std::printf("Core header/own bars spacing reacts to zero, negative fractional and positive values exit=%d\n",result);
+            const int oldDefault[]={92,340,5,19,13,12,14,12};
+            for(int i=1;i<8;++i)options[i].value=oldDefault[i];rowSpacing=5;detailed=true;SaveSettings();ReadPreferences();
+            if(detailed || options[1].value!=250 || options[4].value!=10)result=44;
+            for(int i=1;i<8;++i)options[i].value=oldDefault[i];rowSpacing=-2.5f;detailed=true;SaveSettings();ReadPreferences();
+            if(!detailed || options[1].value!=340 || rowSpacing!=-2.5f)result=45;
+            ApplyPreset(1);SetWindowTextW(edits[2],OptionText(2).c_str());Layout();
+            std::printf("Smaller presets and legacy default/custom settings migration exit=%d\n",result);
             std::printf("Signed/fractional spacing: input, invalid/partial values, persistence, layout bounds and presets exit=%d\n",result);
             SetWindowTextW(edits[4],L"36");SetWindowTextW(edits[1],L"220");
             if(contentWidth-labelWidth-frequencyWidth-ipcWidth-busyWidth-2*options[6].value<32)result=2;
